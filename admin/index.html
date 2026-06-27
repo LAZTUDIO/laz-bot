@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LAZ-Bot 管理面板</title>
+<link rel="stylesheet" href="/admin/static/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="logo">
+      <h1>LAZ-Bot</h1>
+      <span class="version" id="appVersion">v0.1</span>
+    </div>
+    <nav>
+      <a class="active" data-page="dashboard" onclick="switchPage('dashboard')">
+        <span class="icon">📊</span> 仪表盘
+      </a>
+      <a data-page="chat" onclick="switchPage('chat')">
+        <span class="icon">💬</span> 聊天调试
+      </a>
+      <a data-page="audio" onclick="switchPage('audio')">
+        <span class="icon">🎤</span> 音频管道
+      </a>
+      <a data-page="models" onclick="switchPage('models')">
+        <span class="icon">🧠</span> 模型配置
+      </a>
+      <a data-page="memory" onclick="switchPage('memory')">
+        <span class="icon">📦</span> 记忆系统
+      </a>
+      <a data-page="settings" onclick="switchPage('settings')">
+        <span class="icon">⚙️</span> 系统设置
+      </a>
+    </nav>
+    <div class="status-bar" id="sidebarStatus">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">检查中...</span>
+    </div>
+  </aside>
+
+  <main id="main-content">
+    <!-- 仪表盘 -->
+    <section id="page-dashboard" class="page active">
+      <h2>📊 系统仪表盘</h2>
+      <div class="cards" id="dashboardCards">
+        <div class="card loading"><h3>服务状态</h3><div class="spinner"></div></div>
+        <div class="card loading"><h3>系统资源</h3><div class="spinner"></div></div>
+        <div class="card loading"><h3>记忆系统</h3><div class="spinner"></div></div>
+        <div class="card loading"><h3>工具注册</h3><div class="spinner"></div></div>
+      </div>
+    </section>
+
+    <!-- 聊天 -->
+    <section id="page-chat" class="page">
+      <h2>💬 聊天调试</h2>
+      <div class="chat-layout">
+        <div class="chat-sessions">
+          <div class="session-header">
+            <h3>会话列表</h3>
+            <button onclick="newSession()" class="btn-sm">+ 新建</button>
+          </div>
+          <div id="sessionList" class="session-list"></div>
+        </div>
+        <div class="chat-main">
+          <div id="chatMessages" class="chat-messages"></div>
+          <div class="chat-input">
+            <textarea id="chatInput" rows="3" placeholder="输入消息..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+            <button onclick="sendChat()">发送</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 音频管道 -->
+    <section id="page-audio" class="page">
+      <h2>🎤 音频管道</h2>
+
+      <div style="margin-bottom:16px;display:flex;align-items:center;gap:12px">
+        <button id="voiceStartBtn" class="btn" onclick="startVoicePipeline()">▶ 启动语音</button>
+        <span id="voiceStatus" style="color:var(--text2);font-size:14px">⚫ 未连接</span>
+      </div>
+
+      <div id="voiceLog" style="height:180px;overflow:auto;background:#1a1a2e;padding:12px;border-radius:8px;margin-bottom:16px;font-size:13px;color:var(--text2)"></div>
+
+      <!-- VU 声压表 -->
+      <div class="vu-row">
+        <div class="vu-panel">
+          <div class="vu-label">🎤 输入</div>
+          <canvas id="vuInput" width="40" height="180" style="border-radius:4px;background:#111"></canvas>
+          <div class="vu-db" id="vuInputDb">-∞ dB</div>
+        </div>
+        <div class="vu-panel">
+          <div class="vu-label">🔊 输出</div>
+          <canvas id="vuOutput" width="40" height="180" style="border-radius:4px;background:#111"></canvas>
+          <div class="vu-db" id="vuOutputDb">-∞ dB</div>
+        </div>
+      </div>
+
+      <!-- 音量控制 -->
+      <div class="gain-row">
+        <div class="gain-group">
+          <label>🎤 输入增益</label>
+          <input type="range" id="inputGainSlider" min="0.2" max="3.0" step="0.1" value="1.0"
+                 oninput="document.getElementById('inputGainVal').textContent=this.value+'x'; saveAudioConfig()">
+          <span id="inputGainVal" class="gain-val">1.0x</span>
+        </div>
+        <div class="gain-group">
+          <label>🔊 输出增益</label>
+          <input type="range" id="outputGainSlider" min="0.2" max="3.0" step="0.1" value="1.0"
+                 oninput="document.getElementById('outputGainVal').textContent=this.value+'x'; saveAudioConfig()">
+          <span id="outputGainVal" class="gain-val">1.0x</span>
+        </div>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <h3>音频设备</h3>
+          <div class="form-group">
+            <label>输入设备（麦克风）</label>
+            <select id="audioInputDevice" onchange="saveAudioConfig()"></select>
+          </div>
+          <div class="form-group">
+            <label>输出设备（扬声器）</label>
+            <select id="audioOutputDevice" onchange="saveAudioConfig()"></select>
+          </div>
+          <button onclick="loadAudioConfig()" class="btn-sm">🔄 刷新设备列表</button>
+        </div>
+        <div class="card">
+          <h3>VAD 触发</h3>
+          <div class="form-group">
+            <label>语音触发阈值</label>
+            <input type="range" id="vadSpeechThresh" min="0.005" max="0.1" step="0.001" value="0.02" oninput="document.getElementById('vadSpeechThreshVal').textContent=this.value" onchange="saveAudioConfig()">
+            <span style="font-size:12px;color:var(--text2)"><span id="vadSpeechThreshVal">0.020</span> (越高越不敏感)</span>
+          </div>
+          <div class="form-group">
+            <label>静默判定阈值</label>
+            <input type="range" id="vadSilenceThresh" min="0.002" max="0.05" step="0.001" value="0.008" oninput="document.getElementById('vadSilenceThreshVal').textContent=this.value" onchange="saveAudioConfig()">
+            <span style="font-size:12px;color:var(--text2)"><span id="vadSilenceThreshVal">0.008</span> (低于此值视为静默)</span>
+          </div>
+          <div class="form-group">
+            <label>静默断句时长 (秒)</label>
+            <input type="range" id="vadSilenceTimeout" min="0.2" max="2.0" step="0.1" value="0.5" oninput="document.getElementById('vadSilenceTimeoutVal').textContent=this.value+'s'" onchange="saveAudioConfig()">
+            <span style="font-size:12px;color:var(--text2)"><span id="vadSilenceTimeoutVal">0.5s</span> (停顿多久后断句)</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>录音限制</h3>
+          <div class="form-group">
+            <label>最大录音长度 (秒)</label>
+            <input type="number" id="vadMaxRecording" value="15" min="5" max="60" step="1" onchange="saveAudioConfig()">
+          </div>
+          <div class="form-group">
+            <label>预录音缓冲 (秒)</label>
+            <input type="number" id="vadPreSpeech" value="0.4" min="0.1" max="1.0" step="0.1" onchange="saveAudioConfig()">
+            <span style="font-size:11px;color:var(--text2)">防止丢失开头音节</span>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" id="vadNoiseAdapt" checked onchange="saveAudioConfig()">
+              自动校准环境噪音
+            </label>
+          </div>
+        </div>
+        <div class="card" style="flex:2; min-width:380px">
+          <h3>🎯 唤醒词管理</h3>
+
+          <!-- 上传区 -->
+          <div class="ww-upload-zone" id="wwUploadZone">
+            <input type="file" id="wwFileInput" accept=".onnx" multiple
+                   style="display:none" onchange="uploadWakeWordFiles(this.files)">
+            <div class="ww-upload-icon">📁</div>
+            <div style="font-size:13px;color:var(--text)">拖拽 .onnx 文件到此处</div>
+            <div style="font-size:11px;color:var(--text2)">或</div>
+            <button class="btn-sm" onclick="document.getElementById('wwFileInput').click()">选择文件</button>
+          </div>
+
+          <!-- 模型列表 -->
+          <div id="wwModelList" style="margin:12px 0;max-height:240px;overflow-y:auto">
+            <div style="color:var(--text2);font-size:13px;text-align:center;padding:20px">加载中...</div>
+          </div>
+
+          <!-- 唤醒阈值 -->
+          <div class="form-group" style="margin-top:12px">
+            <label>唤醒阈值: <span id="wwThresholdVal">0.50</span></label>
+            <input type="range" id="wwThreshold" min="0.1" max="0.95" step="0.05" value="0.5"
+                   oninput="document.getElementById('wwThresholdVal').textContent=parseFloat(this.value).toFixed(2)"
+                   onchange="saveWakeWordConfig()">
+          </div>
+
+          <div id="wakeStatus" style="color:var(--text2);font-size:12px;margin-top:8px;text-align:center">
+            ⏳ 未加载唤醒词
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 模型配置 -->
+    <section id="page-models" class="page">
+      <h2>🧠 模型配置</h2>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px">
+        每个类别可添加多个模型，API 密钥独立设置于每个模型中。
+        选择提供商模板自动填入 URL，只需填入密钥即可。
+      </p>
+      <div id="modelCategories"></div>
+    </section>
+
+    <!-- 模型编辑弹窗 -->
+    <div id="modelEditModal" class="modal" style="display:none">
+      <div class="modal-content" style="width:560px">
+        <div class="modal-header">
+          <h3 id="modalTitle">添加模型</h3>
+          <button onclick="closeModelModal()" class="modal-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>提供商模板</label>
+            <select id="modProvider" onchange="onProviderChange()">
+              <option value="">— 选择提供商 —</option>
+            </select>
+          </div>
+          <hr style="border-color:var(--border);margin:12px 0">
+          <div class="form-group">
+            <label>显示名称</label>
+            <input type="text" id="modLabel" placeholder="我的模型" oninput="onLabelChange()">
+          </div>
+          <div class="form-group">
+            <label>标识名 (自动生成)</label>
+            <input type="text" id="modName" placeholder="my-model" readonly style="opacity:0.6">
+          </div>
+          <div class="form-group">
+            <label>模型 ID</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <select id="modModelId" style="flex:1;min-width:200px" onchange="onModelIdChange(this)">
+                <option value="">— 先测试连接以获取模型列表 —</option>
+              </select>
+              <input type="text" id="modModelIdManual" placeholder="或手动输入模型 ID" style="flex:1;min-width:200px;display:none" oninput="onModelIdSet(this.value)">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>API Base URL</label>
+            <input type="text" id="modBaseUrl" placeholder="https://api.siliconflow.cn/v1">
+          </div>
+          <div class="form-group">
+            <label>API 密钥</label>
+            <div style="display:flex;gap:8px">
+              <input type="password" id="modApiKey" placeholder="sk-..." style="flex:1">
+              <button id="btnTestConn" onclick="testConnection()" class="btn-sm">🔗 测试连接</button>
+            </div>
+            <div id="modTestResult" style="font-size:12px;margin-top:4px;min-height:18px"></div>
+          </div>
+          <!-- TTS 专属参数 -->
+          <div id="ttsExtraFields" style="display:none;padding:8px;background:var(--surface);border-radius:6px;margin-bottom:8px">
+            <div class="form-group">
+              <label>音色 (Voice)</label>
+              <input type="text" id="modTtsVoice" placeholder="fnlp/MOSS-TTSD-v0.5:alex">
+            </div>
+            <div class="form-group">
+              <label>语速</label>
+              <input type="number" id="modTtsSpeed" value="1.0" step="0.05" min="0.5" max="2.0">
+            </div>
+            <div class="form-group">
+              <label>输出格式</label>
+              <select id="modTtsFormat">
+                <option value="mp3">mp3</option>
+                <option value="wav">wav</option>
+                <option value="pcm">pcm</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group" id="modExtraField" style="display:none">
+            <label id="modExtraLabel">额外参数</label>
+            <input type="text" id="modExtraValue" placeholder="">
+          </div>
+          <div class="form-group">
+            <label>备注</label>
+            <input type="text" id="modNotes" placeholder="描述/说明">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModelModal()">取消</button>
+          <button id="btnSaveModel" onclick="saveModelEntry()" style="background:var(--accent2);color:#0f0f23">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 记忆系统 -->
+    <section id="page-memory" class="page">
+      <h2>📦 记忆系统</h2>
+      <div class="cards">
+        <div class="card" id="memoryStatsCard">
+          <h3>记忆统计</h3>
+          <div class="loading">加载中...</div>
+        </div>
+        <div class="card" style="flex:2">
+          <h3>记忆搜索</h3>
+          <div class="form-group" style="display:flex;gap:8px">
+            <input type="text" id="memorySearchQuery" placeholder="输入搜索关键词..." style="flex:1">
+            <button onclick="searchMemory()" class="btn-sm">搜索</button>
+          </div>
+          <div id="memoryResults"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>记忆配置</h3>
+        <div class="form-row">
+          <div class="form-group">
+            <label>向量权重</label>
+            <input type="number" id="memVecWeight" value="0.4" step="0.05" min="0" max="1" onchange="saveMemoryConfig()">
+          </div>
+          <div class="form-group">
+            <label>关键词权重</label>
+            <input type="number" id="memKwWeight" value="0.3" step="0.05" min="0" max="1" onchange="saveMemoryConfig()">
+          </div>
+          <div class="form-group">
+            <label>近因权重</label>
+            <input type="number" id="memRecencyWeight" value="0.3" step="0.05" min="0" max="1" onchange="saveMemoryConfig()">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>检索 Top-K</label>
+            <input type="number" id="memTopK" value="10" onchange="saveMemoryConfig()">
+          </div>
+          <div class="form-group">
+            <label>最终返回数</label>
+            <input type="number" id="memFinalK" value="5" onchange="saveMemoryConfig()">
+          </div>
+          <div class="form-group">
+            <label>遗忘半衰期 (天)</label>
+            <input type="number" id="memHalflife" value="7" onchange="saveMemoryConfig()">
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 系统设置 -->
+    <section id="page-settings" class="page">
+      <h2>⚙️ 系统设置</h2>
+      <div class="cards">
+        <div class="card">
+          <h3>执行引擎</h3>
+          <div class="form-group">
+            <label>工具超时 (秒)</label>
+            <input type="number" id="execTimeout" value="30" onchange="saveGeneralConfig()">
+          </div>
+          <div class="form-group">
+            <label>最大工具轮次</label>
+            <input type="number" id="execMaxRounds" value="3" onchange="saveGeneralConfig()">
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:16px;display:flex;gap:12px;flex-wrap:wrap">
+        <button onclick="restartService()" class="btn-warn">🔄 重启 LAZ-Bot 服务</button>
+        <button onclick="viewLogs()" class="btn">📋 查看日志</button>
+        <button onclick="openWebUI()" class="btn">🌐 打开 Open WebUI</button>
+      </div>
+      <div id="logViewer" class="log-viewer" style="display:none;margin-top:16px">
+        <h3>日志</h3>
+        <pre id="logContent" style="max-height:400px;overflow:auto;background:#1a1a2e;padding:12px;border-radius:8px;font-size:12px">加载中...</pre>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="/admin/static/app.js"></script>
+</body>
+</html>

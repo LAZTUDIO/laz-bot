@@ -1,0 +1,57 @@
+# ── secrets ──
+config.yaml
+.env
+*.pem
+*.key
+credentials.*
+
+# ── personal deployment tools ──
+scripts/upload2.py
+scripts/upload_and_deploy.py
+scripts/check_pi.py
+scripts/fix_deploy.py
+scripts/auto_setup.sh
+deploy_final.sh
+deploy_final.log
+
+# ── runtime data ──
+data/
+wake_words/*.onnx
+!wake_words/.gitkeep
+*.db
+*.db-journal
+*.db-wal
+
+# ── Python ──
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.bak
+
+# ── deprecated ──
+main.py
+_deprecated/
+
+# ── IDE / OS ──
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── logs / temp ──
+*.log
+setup.log
+setup_docker.log
+/tmp/
+
+# ── uploads / media ──
+media/
+uploads/
+
+# ── Open WebUI (Docker managed separately) ──
+openwebui_data/

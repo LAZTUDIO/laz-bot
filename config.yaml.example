@@ -1,0 +1,101 @@
+app:
+  host: 0.0.0.0
+  log_level: INFO
+  name: LAZ-Bot
+  port: 8765
+  version: 0.3.0
+executor:
+  max_tool_rounds: 3
+  path_whitelist:
+  - /path/to/laz-bot/data
+  - /tmp
+  tool_timeout: 30
+memory:
+  db_path: /path/to/laz-bot/data/fusion_memory.db
+  forgetting:
+    archive_threshold: 0.05
+    cleanup_after_days: 90
+    halflife_base: 7
+  retrieval:
+    fts_top_k: 10
+    keyword_weight: 0.3
+    knn_top_k: 10
+    recency_weight: 0.3
+    rrf_final_k: 5
+    vector_weight: 0.4
+  short_term_max_rounds: 50
+models:
+  embedding:
+    active: baai-bge-m3
+    entries:
+    - api_key: YOUR_API_KEY_HERE
+      base_url: https://api.siliconflow.cn/v1
+      dim: 1024
+      label: BAAI/Bge M3
+      model_id: Pro/BAAI/bge-m3
+      name: baai-bge-m3
+      notes: ''
+      provider: siliconflow
+  llm:
+    active: dq2-api
+    entries:
+    - api_key: YOUR_API_KEY_HERE
+      base_url: http://localhost:3000/api
+      label: Dq2 Api
+      model_id: dq2-api
+      name: dq2-api
+      notes: RAG知识库 + 多模型路由 均走 Open WebUI 中转
+      provider: custom
+      timeout: 120
+    - api_key: ''
+      base_url: http://YOUR_IP:1234/v1
+      label: Gemma 4 E2b It Qat
+      model_id: gemma-4-e2b-it-qat
+      name: gemma-4-e2b-it-qat
+      notes: ''
+      provider: custom
+      timeout: 30
+  stt:
+    active: sense-voice-small
+    entries:
+    - api_key: YOUR_API_KEY_HERE
+      base_url: https://api.siliconflow.cn/v1
+      label: Sense Voice Small
+      model_id: FunAudioLLM/SenseVoiceSmall
+      name: sense-voice-small
+      notes: ''
+      provider: siliconflow
+  tts:
+    active: moss-ttsd-v0-5
+    entries:
+    - api_key: YOUR_API_KEY_HERE
+      base_url: https://api.siliconflow.cn/v1
+      label: MOSS TTS v0.5
+      model_id: fnlp/MOSS-TTSD-v0.5
+      name: moss-ttsd-v0-5
+      notes: ''
+      provider: siliconflow
+      response_format: mp3
+      speed: 0.95
+      voice: fnlp/MOSS-TTSD-v0.5:alex
+openwebui:
+  base_url: ''
+voice:
+  channels: 1
+  frame_size: 1024
+  input_device: plughw:2,0
+  input_gain: 0.2
+  max_recording_sec: 15
+  noise_adapt: true
+  output_device: plughw:2,0
+  output_gain: 0.2
+  pre_speech_sec: 0.4
+  sample_rate: 48000
+  silence_threshold: 0.008
+  silence_timeout: 0.5
+  speech_threshold: 0.02
+  vu_interval: 0.08
+  wake_model_path: wake_words/jiweisi.onnx
+  wake_threshold: 0.4
+  wake_words:
+  - jiweisi
