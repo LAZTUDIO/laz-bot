@@ -1,4 +1,6 @@
-# LAZ-Bot — 融合智能体
+# LAZ-Bot — 融合怪，树莓派5语音交互终端
+
+（测试版）
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
@@ -10,7 +12,7 @@
 ```
 
 核心特性：
-- 🧠 **Sovyx 风格三级记忆** — 短期 (deque) + 长期向量 (sqlite-vec) + 脑图 (EpisodicGraph)
+- 🧠 **三级记忆** — 短期 (deque) + 长期向量 (sqlite-vec) + 脑图 (EpisodicGraph)
 - ⏳ **Ebbinghaus 遗忘调度** — 模拟人类记忆衰减曲线
 - 🔗 **Hebbian 突触学习** — 概念共现自动强化关联
 - 🎤 **语音交互** — ALSA 原生采集/播放，智能 VAD，唤醒词检测
