@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<html><body>
+<div id="testOutput"></div>
+<script src="/admin/static/app.js?v=3"></script>
+<script>
+document.getElementById('testOutput').textContent = 
+  typeof loadDashboard === 'function' ? 'JS OK - loadDashboard exists' : 'JS FAILED - loadDashboard undefined';
+</script>
+</body></html>

@@ -24,11 +24,12 @@ logger = logging.getLogger("laz-bot.voice")
 class VoicePipeline:
     """语音全双工管道，通过 WebSocket 推送状态"""
 
-    def __init__(self, config: dict, model_router, llm_router, memory_service):
+    def __init__(self, config: dict, model_router, llm_router, memory_service, cognitive_cycle=None):
         self.config = config
         self.model_router = model_router
         self.llm = llm_router
         self.memory = memory_service
+        self.cycle = cognitive_cycle  # 认知循环实例（与聊天调试同源）
 
         vc = config.get("voice", {})
         self.sample_rate = vc.get("sample_rate", 48000)
@@ -196,7 +197,7 @@ class VoicePipeline:
                 # ── 唤醒词检测 ──
                 audio_data = np.concatenate(chunks)
                 if self._wakeword:
-                    if not self._wakeword.contains_wake_word(audio_data):
+                    if not self._wakeword.contains_wake_word(audio_data, source_sample_rate=self.sample_rate):
                         logger.info("[Voice] Wake word not detected — ignored")
                         await self.send_event(ws, "status", "listening")
                         continue
@@ -215,18 +216,22 @@ class VoicePipeline:
                 logger.info(f"[Voice] Heard: {text}")
                 await self.send_event(ws, "transcript", text)
 
-                # ── LLM ──
+                # ── LLM（走认知循环，与聊天同源）──
                 await self.send_event(ws, "status", "thinking")
-                reply = await self.llm.chat_completion(
-                    messages=[{"role": "user", "content": text}],
-                )
-
-                if "error" in reply:
-                    await self.send_event(ws, "error", reply["error"])
-                    self.in_conversation = False
-                    continue
-
-                content = reply["choices"][0]["message"]["content"]
+                if self.cycle:
+                    # 走完整的认知循环：记忆检索→人格注入→工具执行→记忆存储
+                    reply_text = await self.cycle.process_text(text, session_id)
+                    content = str(reply_text) if reply_text else "(空)"
+                else:
+                    # 降级：直接调 LLM
+                    reply = await self.llm.chat_completion(
+                        messages=[{"role": "user", "content": text}],
+                    )
+                    if "error" in reply:
+                        await self.send_event(ws, "error", reply["error"])
+                        self.in_conversation = False
+                        continue
+                    content = reply["choices"][0]["message"]["content"]
                 logger.info(f"[Voice] Reply: {content[:60]}...")
                 await self.send_event(ws, "response", content)
 
@@ -242,8 +247,8 @@ class VoicePipeline:
                     })
                     play.write(audio_out)
 
-                # ── 记忆 ──
-                if self.memory:
+                # ── 记忆（走认知循环时 process_text 内部已处理）──
+                if not self.cycle and self.memory:
                     asyncio.create_task(
                         self.memory.store_interaction(session_id, "user", text))
                     asyncio.create_task(

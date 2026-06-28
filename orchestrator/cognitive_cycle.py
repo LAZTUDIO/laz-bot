@@ -16,12 +16,12 @@ class CognitiveCycle:
     async def process_text(self, text, session_id=None):
         if not session_id:
             session_id = str(uuid.uuid4())
-        session = self.sessions.get_or_create(session_id)
-        session.add_message("user", text)
+        self.sessions.add_message(session_id, "user", text)
+        session = self.sessions.get(session_id)
         memory_ctx = await self._attend(text, session_id)
         llm_response = await self._think(text, memory_ctx, session_id)
         if "error" in llm_response:
-            session.add_message("assistant", text[:50])
+            self.sessions.add_message(session_id, "assistant", text[:50])
             return text[:50]
         message = llm_response["choices"][0]["message"]
         if message.get("tool_calls"):
@@ -30,7 +30,7 @@ class CognitiveCycle:
             final = message.get("content", "")
         asyncio.create_task(self._reflect(session_id, text, final))
         if isinstance(final, str):
-            session.add_message("assistant", final)
+            self.sessions.add_message(session_id, "assistant", final)
         return final
 
     async def _attend(self, query, session_id):
@@ -48,13 +48,30 @@ class CognitiveCycle:
     async def _think(self, text, memory_ctx, session_id):
         sp = self._build_system_prompt(memory_ctx)
         msgs = [{"role": "system", "content": sp}]
+        prelude = ""
         if self.memory:
+            # 注入当前情绪（PAD影响，有pad_baseline开关）
+            emotion = self.memory.pad.get_emotional_state()
+            if emotion.get("label") != "平静":
+                prelude = f"[情绪: {emotion['label']} P={emotion['pleasure']:.1f} A={emotion['arousal']:.1f} D={emotion['dominance']:.1f}] "
             msgs.extend(self.memory.short_term.get_chat_messages(session_id, 10))
+
+            # 人格影响回复长度（有开关控制）
+            if self.memory.personality.is_impact_enabled("reply_length"):
+                sysp = self.memory.personality.get_impact()
+                verbosity = sysp.get("verbosity", 0.5)
+                max_tokens = int(196 + verbosity * 600)
+            else:
+                max_tokens = 512
+        else:
+            max_tokens = 512
+
         if not msgs or msgs[-1]["role"] != "user":
-            msgs.append({"role": "user", "content": text})
+            msgs.append({"role": "user", "content": prelude + text})
+
         tools = self.executor.get_tool_definitions() if self.executor else None
         if self.llm:
-            return await self.llm.chat_completion(messages=msgs, tools=tools)
+            return await self.llm.chat_completion(messages=msgs, tools=tools, max_tokens=max_tokens)
         return {"choices": [{"message": {"content": f"[Fallback] {text[:50]}..."}}]}
 
     async def _act(self, message, session_id):
@@ -92,11 +109,38 @@ class CognitiveCycle:
             logger.error(f"[Reflect] {e}")
 
     def _build_system_prompt(self, memory_ctx):
-        lines = [
-            "你是 LAZ-Bot，运行在树莓派 5 上的本地编排融合智能体。",
+        # 人格注入（有开关控制）
+        pers_block = ""
+        warmth_notes = ""
+        if self.memory:
+            p = self.memory.personality
+            if p.is_impact_enabled("llm_prompt"):
+                sbtype = p.type
+                pers_block = f"你当前的人格是「{sbtype.emoji} {sbtype.name}」({sbtype.code})。\n"
+                pers_block += f"{sbtype.description}\n"
+                pers_block += f"特质: {sbtype.features}\n\n"
+            if p.is_impact_enabled("warmth_tone"):
+                sysp = p.get_impact()
+                warmth = sysp.get("warmth", 0.5)
+                trust = sysp.get("trust_assumption", 0.5)
+                direct = sysp.get("directness", 0.5)
+                if warmth > 0.7:
+                    warmth_notes = "语气要温暖、共情、像朋友一样。"
+                elif warmth < 0.3:
+                    warmth_notes = "语气要冷静、客观、保持距离。"
+                if trust < 0.4:
+                    warmth_notes += "对用户说的信息保持适度怀疑，可以追问确认。"
+                if direct > 0.7:
+                    warmth_notes += "表达要直接，不用绕弯子。"
+        lines = [pers_block + "你是 LAZ-Bot，运行在树莓派上的融合智能体。"]
+        if self.memory:
+            emotion = self.memory.pad.get_emotional_state()
+            lines.append(f"用户当前情绪状态: {emotion['label']} "
+                         f"(愉悦={emotion['pleasure']:.2f} 唤醒={emotion['arousal']:.2f} 支配={emotion['dominance']:.2f})")
+        lines.append(warmth_notes)
+        lines.extend([
             "你拥有语音交互、记忆系统和工具调用能力。",
-            "回答要简洁、准确、有帮助。",
-        ]
+        ])
         ctx = memory_ctx.get("context", "")
         if ctx:
             lines.append("\n=== 上下文信息 ===")

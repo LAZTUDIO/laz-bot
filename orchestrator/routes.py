@@ -8,6 +8,7 @@ import yaml
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
+from memory.personality import TYPES
 
 router = APIRouter()
 CONFIG_PATH = os.environ.get("LAZ_CONFIG", os.path.join(os.path.dirname(__file__), "..", "config.yaml"))
@@ -201,6 +202,7 @@ async def audio_websocket(ws: WebSocket):
         model_router=app.state.model_router,
         llm_router=app.state.llm,
         memory_service=app.state.memory,
+        cognitive_cycle=app.state.cycle,
     )
 
     try:
@@ -234,11 +236,14 @@ async def chat(request: Request, req: ChatRequest):
     if not request.app.state.initialized:
         return ChatResponse(response="系统正在初始化，请稍后...", session_id=req.session_id)
     result = await request.app.state.cycle.process_text(req.text, req.session_id or None)
-    session = request.app.state.cycle.sessions
-    sid = req.session_id or list(session.sessions.keys())[-1]
+    sid = req.session_id
+    if not sid:
+        # Get the last session ID from the cycle's sessions
+        sessions = request.app.state.cycle.sessions.list_sessions()
+        sid = sessions[0]["id"] if sessions else "unknown"
     return ChatResponse(response=result, session_id=sid)
 
-# ── Sessions ──
+# ── Sessions (持久化) ──
 
 @router.get("/api/sessions")
 async def list_sessions(request: Request):
@@ -250,14 +255,96 @@ async def list_sessions(request: Request):
 async def get_session(request: Request, session_id: str):
     if not request.app.state.cycle:
         return {"error": "Not initialized"}
-    return request.app.state.cycle.get_session_summary(session_id)
+    session = request.app.state.cycle.sessions.get(session_id)
+    if not session:
+        return {"error": "Session not found"}
+    return {
+        "id": session.id,
+        "title": session.title,
+        "messages": [{"role": m.role, "content": m.content, "timestamp": m.timestamp}
+                     for m in session.messages],
+        "created_at": session.created_at,
+        "last_active": session.last_active,
+    }
 
-@router.post("/api/session/{session_id}/clear")
-async def clear_session(request: Request, session_id: str):
+@router.delete("/api/session/{session_id}")
+async def delete_session(request: Request, session_id: str):
     if not request.app.state.cycle:
         return {"error": "Not initialized"}
-    request.app.state.cycle.sessions.clear_session(session_id)
-    return {"status": "cleared", "session_id": session_id}
+    request.app.state.cycle.sessions.delete(session_id)
+    return {"status": "deleted", "session_id": session_id}
+
+@router.patch("/api/session/{session_id}")
+async def rename_session(request: Request, session_id: str):
+    if not request.app.state.cycle:
+        return {"error": "Not initialized"}
+    body = await request.json()
+    new_title = body.get("title", "").strip()
+    if new_title:
+        request.app.state.cycle.sessions.rename(session_id, new_title)
+    return {"status": "renamed", "session_id": session_id, "title": new_title}
+
+# ── Personality ──
+
+@router.get("/api/personality")
+async def get_personality(request: Request):
+    if not request.app.state.cycle or not request.app.state.cycle.memory:
+        return {"error": "Not initialized"}
+    mem = request.app.state.cycle.memory
+    return {
+        "personality": mem.personality.to_dict(),
+        "emotional_state": mem.pad.get_emotional_state(),
+        "history": mem.pad.get_history(20),
+        "personalities": {code: tmpl.to_dict() for code, tmpl in TYPES.items()},
+    }
+
+@router.post("/api/personality/switch")
+async def switch_personality(request: Request):
+    if not request.app.state.cycle or not request.app.state.cycle.memory:
+        return {"error": "Not initialized"}
+    body = await request.json()
+    code = body.get("code", "OJBK")
+    mem = request.app.state.cycle.memory
+    mem.personality.set_type(code)
+    mem._sync_pad_baseline()
+    # Update config
+    cfg = _load_config()
+    cfg.setdefault("personality", {})["active"] = code
+    _save_config(cfg)
+    return {"status": "switched", "code": code}
+
+@router.post("/api/personality/evolution")
+async def toggle_evolution(request: Request):
+    if not request.app.state.cycle or not request.app.state.cycle.memory:
+        return {"error": "Not initialized"}
+    body = await request.json()
+    enabled = body.get("enabled", False)
+    rate = body.get("rate", 0.02)
+    mem = request.app.state.cycle.memory
+    mem.personality.evolution_enabled = enabled
+    mem.personality.evolution_rate = rate
+    cfg = _load_config()
+    cfg.setdefault("personality", {})["evolution"] = enabled
+    cfg.setdefault("personality", {})["evolution_rate"] = rate
+    _save_config(cfg)
+    return {"status": "updated", "evolution": enabled, "rate": rate}
+
+@router.post("/api/personality/impacts")
+async def set_personality_impacts(request: Request):
+    if not request.app.state.cycle or not request.app.state.cycle.memory:
+        return {"error": "Not initialized"}
+    body = await request.json()
+    impacts = body.get("impacts", {})
+    mem = request.app.state.cycle.memory
+    mem.personality.set_impacts(impacts)
+    # 重新同步PAD和遗忘
+    mem._sync_pad_baseline()
+    mem._sync_forgetting()
+    # 保存到配置
+    cfg = _load_config()
+    cfg.setdefault("personality", {})["impacts"] = mem.personality.impacts
+    _save_config(cfg)
+    return {"status": "updated", "impacts": mem.personality.impacts}
 
 # ── Memory ──
 
@@ -627,19 +714,55 @@ async def get_logs(lines: int = 50):
     except Exception as e:
         return {"error": str(e)}
 
-# ── WebSocket audio ──
+# ── VU Meter WebSocket (独立于语音管线，实时显示电平) ──
 
-@router.websocket("/ws/audio")
-async def websocket_audio(websocket: WebSocket, request: Request):
-    await websocket.accept()
-    print("[WS] Audio client connected")
+@router.websocket("/ws/vu")
+async def vu_meter_websocket(ws: WebSocket):
+    await ws.accept()
+    import asyncio, time, numpy as np
+    from voice_pipeline.alsa_capture import AlsaCapture
+
+    # 从配置读取设备
+    cfg = _load_config()
+    vc = cfg.get("voice", {})
+    device = vc.get("input_device", "plughw:2,0")
+
+    cap = AlsaCapture(device=device, sample_rate=48000, channels=1, frame_size=1024)
     try:
+        # 用 arecord -l 先验证设备存在
+        import subprocess as sp
+        r = sp.run(["arecord", "-l"], capture_output=True, text=True, timeout=3)
+        if "card" not in r.stdout and device != "plughw:2,0":
+            await ws.send_json({"type": "vu_error", "data": f"设备 {device} 可能不可用"})
+
+        cap.start()
+        # 预热：丢弃前几帧避免启动噪音
+        for _ in range(5):
+            cap.read()
+            await asyncio.sleep(0.001)
+
+        await ws.send_json({"type": "vu_ready", "data": f"VU 表已启动 ({device})"})
+
         while True:
-            data = await websocket.receive_bytes()
-            await websocket.send_json({"type": "audio_received",
-                                       "bytes": len(data),
-                                       "session_id": "pending"})
-    except WebSocketDisconnect:
-        print("[WS] Audio client disconnected")
+            arr = cap.read()
+            rms = float(np.sqrt(np.mean(arr ** 2)))
+            peak = float(np.max(np.abs(arr)))
+            db = 20 * np.log10(max(rms, 1e-6))
+            await ws.send_json({
+                "type": "vu_input",
+                "data": {
+                    "rms": round(rms, 5),
+                    "db": round(db, 1),
+                    "peak": round(peak, 4),
+                }
+            })
+            await asyncio.sleep(0.08)  # 约 12Hz 刷新
+    except asyncio.CancelledError:
+        pass
     except Exception as e:
-        print(f"[WS] Error: {e}")
+        try:
+            await ws.send_json({"type": "vu_error", "data": str(e)})
+        except Exception:
+            pass
+    finally:
+        cap.stop()

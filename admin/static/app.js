@@ -1,13 +1,22 @@
 'use strict';
 
 let currentSession = null;
+let vuWs = null;
 let templates = [];
 let editingCategory = '';
 let editingName = '';
 
 // ── DOM Ready ──
 document.addEventListener('DOMContentLoaded', () => {
-  loadDashboard();
+  // 加载超时兜底——5秒后无论如何隐藏 spinner
+  const timeoutId = setTimeout(() => {
+    const cards = document.getElementById('dashboardCards');
+    if (cards && cards.querySelector('.loading')) {
+      cards.innerHTML = '<div class="card"><h3>⚠️ 加载超时</h3><p>API 响应超时，请检查服务状态。<br><button onclick="location.reload()" style="margin-top:8px">🔄 重试</button></p></div>';
+    }
+  }, 5000);
+
+  loadDashboard().then(() => clearTimeout(timeoutId)).catch(() => clearTimeout(timeoutId));
   checkHealth();
   setInterval(checkHealth, 15000);
 });
@@ -28,8 +37,8 @@ function switchPage(name) {
   document.getElementById(`page-${name}`).classList.add('active');
   document.querySelector(`nav a[data-page="${name}"]`).classList.add('active');
   switch(name) {
-    case 'chat': loadSessions(); break;
-    case 'audio': loadAudioConfig(); break;
+    case 'chat': loadSessions(); updateContextBar(); break;
+    case 'audio': loadAudioConfig(); initAudioPage(); break;
     case 'models': loadModelPage(); break;
     case 'memory': loadMemoryStats(); break;
     case 'settings': loadGeneralConfig(); break;
@@ -38,17 +47,27 @@ function switchPage(name) {
 
 // ── API Helper ──
 async function api(url, options = {}) {
-  const resp = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    ...options
-  });
-  if (!resp.ok) {
-    const body = await resp.text();
-    let msg = body;
-    try { msg = JSON.parse(body).detail || body; } catch(e) {}
-    throw new Error(msg.slice(0, 100));
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  try {
+    const resp = await fetch(url, {
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+      signal: controller.signal,
+      ...options
+    });
+    clearTimeout(timeoutId);
+    if (!resp.ok) {
+      const body = await resp.text();
+      let msg = body;
+      try { msg = JSON.parse(body).detail || body; } catch(e) {}
+      throw new Error(msg.slice(0, 100));
+    }
+    return resp.json();
+  } catch(e) {
+    clearTimeout(timeoutId);
+    if (e.name === 'AbortError') throw new Error('请求超时');
+    throw e;
   }
-  return resp.json();
 }
 
 // ── Health Check ──
@@ -72,8 +91,9 @@ async function checkHealth() {
 async function loadDashboard() {
   const container = document.getElementById('dashboardCards');
   try {
-    const [health, system, config] = await Promise.all([
-      api('/health'), api('/api/system'), api('/api/config')
+    const [health, system, config, personality] = await Promise.all([
+      api('/health'), api('/api/system'), api('/api/config'),
+      api('/api/personality').catch(() => null)
     ]);
     container.innerHTML = `
       <div class="card">
@@ -139,6 +159,16 @@ async function loadDashboard() {
           <button onclick="switchPage('settings')">⚙️ 系统设置</button>
         </div>
       </div>
+      ${personality ? `
+      <div class="card">
+        <h3>🧠 当前人格</h3>
+        <div style="font-size:24px;margin:4px 0">${personality.personality.emoji} ${personality.personality.name}</div>
+        <div style="font-size:11px;color:var(--accent);font-family:monospace">${personality.personality.current} · ${personality.personality.pattern}</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:4px">${personality.personality.description}</div>
+        <div class="stat-row"><span class="label">情绪</span><span class="value">${personality.emotional_state.label}</span></div>
+        <div class="stat-row"><span class="label">演化</span><span class="value">${personality.personality.evolution_enabled ? '✅ 开启' : '⏸ 关闭'}</span></div>
+        <button style="margin-top:8px" onclick="switchPage('personality')">🧠 切换人格</button>
+      </div>` : ''}
     `;
     document.getElementById('appVersion').textContent = `v${config.app?.version || '0.1'}`;
   } catch(e) {
@@ -162,6 +192,161 @@ function getActiveModelLabel(config, category) {
 }
 
 // ════════════════════════════════════════
+//  PERSONALITY
+// ════════════════════════════════════════
+
+async function loadPersonality() {
+  const container = document.getElementById('personalityContent');
+  if (!container) return;
+  container.innerHTML = '<div class="loading">加载中...</div>';
+  try {
+    const data = await api('/api/personality');
+    const p = data.personality;
+    const e = data.emotional_state;
+    const pList = Object.entries(data.personalities || {});
+
+    let html = `
+      <div class="cards" style="margin-bottom:16px">
+        <div class="card" style="text-align:center">
+          <div style="font-size:48px">${p.emoji}</div>
+          <h3>${p.name}</h3>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:4px">${p.current}</div>
+          <div style="font-size:12px;color:var(--accent);font-family:monospace">${p.pattern || ''}</div>
+          <div style="font-size:13px;color:var(--text2);margin:8px 0">${p.description}</div>
+          <div style="font-size:12px;color:var(--text);background:var(--bg);border-radius:8px;padding:8px 12px;margin:8px auto;max-width:500px">
+            ${escapeHtml(p.dim_short || '')}
+          </div>
+
+          <div style="display:flex;gap:16px;justify-content:center;margin:12px 0;flex-wrap:wrap">
+            <div style="background:var(--bg);border-radius:8px;padding:8px 16px;text-align:center">
+              <div style="font-size:11px;color:var(--text2)">愉悦 P</div>
+              <div style="font-size:18px;font-weight:bold;color:${e.pleasure > 0 ? '#34d399' : '#f87171'}">${e.pleasure.toFixed(2)}</div>
+            </div>
+            <div style="background:var(--bg);border-radius:8px;padding:8px 16px;text-align:center">
+              <div style="font-size:11px;color:var(--text2)">唤醒 A</div>
+              <div style="font-size:18px;font-weight:bold;color:${e.arousal > 0 ? '#facc15' : '#60a5fa'}">${e.arousal.toFixed(2)}</div>
+            </div>
+            <div style="background:var(--bg);border-radius:8px;padding:8px 16px;text-align:center">
+              <div style="font-size:11px;color:var(--text2)">支配 D</div>
+              <div style="font-size:18px;font-weight:bold;color:${e.dominance > 0 ? '#a78bfa' : '#f472b6'}">${e.dominance.toFixed(2)}</div>
+            </div>
+          </div>
+          <div style="font-size:13px;color:var(--text2)">情绪状态: <strong>${e.label}</strong> (强度 ${e.magnitude})</div>
+
+          <div class="form-group" style="margin-top:12px">
+            <label>切换人格</label>
+            <select id="personalitySelect" onchange="switchPersonality(this.value)" style="font-size:13px">
+              ${pList.map(([code, t]) =>
+                `<option value="${code}" ${code === p.current ? 'selected' : ''}>${t.emoji} ${t.name} (${code})</option>`
+              ).join('')}
+            </select>
+          </div>
+
+          <div class="form-group" style="margin-top:8px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="evolutionToggle" ${p.evolution_enabled ? 'checked' : ''}
+                     onchange="toggleEvolution(this.checked)">
+              自动人格演化
+            </label>
+          </div>
+
+          <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
+            <h4 style="font-size:13px;margin:0 0 8px 0">人格影响开关</h4>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;text-align:left">
+              ${Object.entries(p.impacts || {}).map(([key, val]) => `
+                <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
+                  <input type="checkbox" ${val ? 'checked' : ''}
+                         onchange="toggleImpact('${key}', this.checked)">
+                  ${IMPACT_LABELS[key] || key}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <h3>所有人格 (${pList.length} 种)</h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;margin-top:8px">
+            ${pList.map(([code, t]) => `
+              <div class="personality-item ${code === p.current ? 'active' : ''}"
+                   onclick="switchPersonality('${code}')" style="cursor:pointer;text-align:left">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                  <span style="font-size:24px">${t.emoji}</span>
+                  <div style="flex:1">
+                    <div style="font-size:12px;font-weight:600;color:var(--text)">${t.name}</div>
+                    <div style="font-size:10px;color:var(--accent);font-family:monospace">${code} · ${t.pattern}</div>
+                  </div>
+                </div>
+                <div style="font-size:11px;color:var(--text2);margin-left:32px">${escapeHtml(t.dim_short || '')}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+
+    container.innerHTML = html;
+  } catch(e) {
+    container.innerHTML = `<div class="error" style="padding:20px;text-align:center;color:var(--warn)">
+      ❌ 加载人格信息失败: ${e.message}</div>`;
+  }
+}
+
+async function switchPersonality(code) {
+  try {
+    await api('/api/personality/switch', {
+      method: 'POST',
+      body: JSON.stringify({ code })
+    });
+    toast(`✅ 已切换至 ${code}`, 'success');
+    loadPersonality();
+    loadDashboard();
+  } catch(e) {
+    toast('切换失败: ' + e.message, 'error');
+  }
+}
+
+async function toggleEvolution(enabled) {
+  try {
+    await api('/api/personality/evolution', {
+      method: 'POST',
+      body: JSON.stringify({ enabled, rate: 0.02 })
+    });
+    toast(enabled ? '✅ 人格演化已开启' : '⏸ 人格演化已暂停', 'success');
+  } catch(e) {
+    toast('设置失败: ' + e.message, 'error');
+  }
+}
+
+const IMPACT_LABELS = {
+  llm_prompt: '🧠 人格注入提示',
+  pad_baseline: '💖 情绪基线偏移',
+  hebbian_lr: '🔗 概念强化速度',
+  importance_bias: '⚖️ 记忆重要性偏置',
+  reply_length: '📝 回复长度',
+  memory_decay: '⏳ 遗忘速度',
+  warmth_tone: '🌡 语气温度',
+  tts_speed: '🎙 语音语速',
+};
+
+async function toggleImpact(key, enabled) {
+  try {
+    const data = await api('/api/personality/impacts', {
+      method: 'POST',
+      body: JSON.stringify({ impacts: { [key]: enabled } })
+    });
+    const label = IMPACT_LABELS[key] || key;
+    toast(enabled ? `✅ ${label} 已开启` : `⏸ ${label} 已关闭`, 'success');
+    // Refresh to show new PAD/forgetting values
+    loadPersonality();
+  } catch(e) {
+    toast('设置失败: ' + e.message, 'error');
+  }
+}
+
+// ════════════════════════════════════════
 //  CHAT
 // ════════════════════════════════════════
 
@@ -169,26 +354,46 @@ async function loadSessions() {
   try {
     const data = await api('/api/sessions');
     const list = document.getElementById('sessionList');
+    const msgs = document.getElementById('chatMessages');
     if (!data.sessions || data.sessions.length === 0) {
-      list.innerHTML = '<div style="color:var(--text2);font-size:12px;padding:8px">暂无会话</div>';
-      document.getElementById('chatMessages').innerHTML = '<div class="msg system">新建一个会话开始聊天</div>';
+      list.innerHTML = '<div class="session-empty">暂无会话，点击上方新建</div>';
+      msgs.innerHTML = '<div class="msg system">💬 点击"新建对话"开始聊天</div>';
+      currentSession = null;
       return;
     }
-    list.innerHTML = data.sessions.map(s => `
-      <div class="session-item ${s.id === currentSession ? 'active' : ''}" onclick="selectSession('${s.id}')">
-        <div>${(s.id || 'unknown').slice(0,16)}...</div>
-        <div class="time">${s.msg_count || 0} 条消息</div>
-      </div>
-    `).join('');
-    if (!currentSession && data.sessions.length > 0) selectSession(data.sessions[0].id);
+    list.innerHTML = data.sessions.map(s => {
+      const date = new Date((s.last_active || s.created_at) * 1000);
+      const dateStr = `${date.getMonth()+1}/${date.getDate()} ${date.getHours().toString().padStart(2,'0')}:${date.getMinutes().toString().padStart(2,'0')}`;
+      const isActive = s.id === currentSession;
+      return `
+        <div class="session-item ${isActive ? 'active' : ''}" onclick="selectSession('${s.id}')">
+          <div class="session-title">${escapeHtml(s.title || '新对话')}</div>
+          <div class="session-meta">
+            <span>${s.msg_count || 0} 条</span>
+            <span>${dateStr}</span>
+          </div>
+          <button class="session-del" onclick="event.stopPropagation();deleteSession('${s.id}')" title="删除">✕</button>
+        </div>`;
+    }).join('');
+
+    // If no current session, auto-select first
+    if (!currentSession) selectSession(data.sessions[0].id);
+    updateContextBar();
   } catch(e) { toast('加载会话失败', 'error'); }
 }
 
 async function selectSession(id) {
   currentSession = id;
-  document.querySelectorAll('.session-item').forEach(e => e.classList.remove('active'));
-  const el = document.querySelector(`.session-item[onclick*="'${id}'"]`);
-  if (el) el.classList.add('active');
+  // Update active visual
+  document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
+  const items = document.querySelectorAll('.session-item');
+  for (const el of items) {
+    if (el.getAttribute('onclick')?.includes(`'${id}'`)) {
+      el.classList.add('active');
+      break;
+    }
+  }
+
   try {
     const data = await api(`/api/session/${id}`);
     const msgs = document.getElementById('chatMessages');
@@ -199,48 +404,182 @@ async function selectSession(id) {
   } catch(e) { toast('加载会话详情失败', 'error'); }
 }
 
+async function deleteSession(id) {
+  if (!confirm(`确定删除此会话？`)) return;
+  try {
+    await api(`/api/session/${id}`, { method: 'DELETE' });
+    if (currentSession === id) currentSession = null;
+    toast('会话已删除', 'success');
+    loadSessions();
+  } catch(e) { toast('删除失败', 'error'); }
+}
+
 function addMessage(role, content) {
   const msgs = document.getElementById('chatMessages');
+  if (!msgs) return;
   const div = document.createElement('div');
   div.className = `msg ${role}`;
   const time = new Date().toLocaleTimeString();
-  div.innerHTML = `<div class="role">${role}</div>${escapeHtml(content)}<div class="time">${time}</div>`;
+
+  // Format content
+  const formatted = role === 'assistant' ? renderMarkdown(content) : escapeHtml(content);
+
+  // Actions (for assistant messages)
+  let actions = '';
+  if (role === 'assistant') {
+    actions = `<div class="msg-actions">
+      <button onclick="copyMsg(this)" title="复制">📋</button>
+      <button onclick="speakMsg('${escapeHtml(content.replace(/'/g, "\\'"))}')" title="朗读">🔊</button>
+      <button onclick="retryMsg('${escapeHtml(content.replace(/'/g, "\\'"))}')" title="重新生成">🔄</button>
+    </div>`;
+  }
+
+  div.innerHTML = `${actions}${formatted}<div class="time">${time}</div>`;
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
+}
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  let html = escapeHtml(text);
+  // Code blocks (```...```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    return `<pre style="background:#1a1a2e;padding:10px;border-radius:8px;overflow-x:auto;font-size:12px;margin:8px 0"><code>${code.trim()}</code></pre>`;
+  });
+  // Inline code (`...`)
+  html = html.replace(/`([^`]+)`/g, '<code style="background:#1a1a2e;padding:2px 5px;border-radius:4px;font-size:12px">$1</code>');
+  // Bold (**...**)
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic (*...*)
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
+function copyMsg(btn) {
+  const msg = btn.closest('.msg');
+  const text = msg.textContent.replace(/📋🔊🔄\d{1,2}:\d{2}:\d{2}(AM|PM)?/, '').trim();
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✅';
+    setTimeout(() => btn.textContent = '📋', 1500);
+  });
+}
+
+async function speakMsg(text) {
+  try {
+    // Use TTS endpoint
+    const reply = await fetch('/api/config', { method: 'GET' }).then(r => r.json());
+    // ... We'd need a dedicated TTS endpoint here
+    toast('🔊 TTS 播放 (需语音管线启动)', 'success');
+  } catch(e) { toast('朗读失败', 'error'); }
+}
+
+function retryMsg(text) {
+  // Re-send the last user message before this assistant response
+  const msgs = document.getElementById('chatMessages');
+  const allMsgs = msgs.querySelectorAll('.msg');
+  let userMsg = '';
+  for (let i = allMsgs.length - 1; i >= 0; i--) {
+    if (allMsgs[i].classList.contains('user')) {
+      userMsg = allMsgs[i].textContent.trim();
+      break;
+    }
+  }
+  if (userMsg) {
+    // Remove the last assistant response + thinking
+    const last = msgs.lastChild;
+    if (last && last.classList.contains('assistant')) last.remove();
+    sendChatWithText(userMsg);
+  }
+}
+
+function filterSessions(query) {
+  const items = document.querySelectorAll('.session-item');
+  const q = query.toLowerCase().trim();
+  items.forEach(el => {
+    const title = el.querySelector('.session-title')?.textContent?.toLowerCase() || '';
+    el.style.display = (!q || title.includes(q)) ? '' : 'flex';
+  });
+}
+
+function exportChat() {
+  const msgs = document.getElementById('chatMessages');
+  if (!msgs) return;
+  const lines = [];
+  msgs.querySelectorAll('.msg').forEach(m => {
+    if (m.classList.contains('system')) return;
+    const role = m.classList.contains('user') ? '🧑 你' : '🤖 AI';
+    // Get text content without action buttons and time
+    const text = m.textContent.replace(/📋🔊🔄/g, '').replace(/\d{1,2}:\d{2}:\d{2}(AM|PM)?/g, '').trim();
+    if (text) lines.push(`${role}: ${text}`);
+  });
+  if (lines.length === 0) { toast('没有可导出的消息', 'warn'); return; }
+  const blob = new Blob([lines.join('\n\n')], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `chat-${new Date().toISOString().slice(0,10)}.txt`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('✅ 对话已导出', 'success');
 }
 
 async function sendChat() {
   const input = document.getElementById('chatInput');
   const text = input.value.trim();
   if (!text) return;
-  addMessage('user', text);
+  sendChatWithText(text);
   input.value = '';
-  addMessage('system', '🤔 思考中...');
+}
+
+async function sendChatWithText(text) {
+  addMessage('user', text);
+  // Thinking animation
+  const msgs = document.getElementById('chatMessages');
+  const thinkDiv = document.createElement('div');
+  thinkDiv.className = 'msg system';
+  thinkDiv.innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span></div>';
+  msgs.appendChild(thinkDiv);
+  msgs.scrollTop = msgs.scrollHeight;
+
   try {
     const data = await api('/api/chat', {
       method: 'POST',
       body: JSON.stringify({ text, session_id: currentSession || '' })
     });
-    const msgs = document.getElementById('chatMessages');
-    const last = msgs.lastChild;
-    if (last && last.classList.contains('system')) last.remove();
-    addMessage('assistant', data.response);
+    // Remove thinking
+    if (thinkDiv.parentNode) thinkDiv.remove();
+
+    addMessage('assistant', data.response || '(空回复)');
     currentSession = data.session_id;
     loadSessions();
+    updateContextBar();
   } catch(e) {
-    const msgs = document.getElementById('chatMessages');
-    const last = msgs.lastChild;
-    if (last && last.classList.contains('system')) {
-      last.innerHTML = `<div class="role">system</div>⚠️ 请求失败<div class="time">${new Date().toLocaleTimeString()}</div>`;
-    }
-    toast('发送失败', 'error');
+    if (thinkDiv.parentNode) thinkDiv.remove();
+    addMessage('system', '❌ 请求失败: ' + e.message);
   }
+}
+
+async function updateContextBar() {
+  try {
+    const pers = await api('/api/personality');
+    const p = pers.personality;
+    const e = pers.emotional_state;
+    const config = await api('/api/config');
+    const llmLabel = getActiveModelLabel(config, 'llm');
+    document.getElementById('ctxPersonality').textContent = `${p.emoji} ${p.name}`;
+    document.getElementById('ctxEmotion').textContent = `💖 ${e.label}`;
+    document.getElementById('ctxModel').textContent = `🔌 ${llmLabel}`;
+  } catch(e) { /* ignore */ }
 }
 
 function newSession() {
   currentSession = null;
-  document.getElementById('chatMessages').innerHTML = '<div class="msg system">新会话已创建</div>';
-  document.querySelectorAll('.session-item').forEach(e => e.classList.remove('active'));
+  document.getElementById('chatMessages').innerHTML = '<div class="msg system">💬 新对话 — 输入消息开始</div>';
+  document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
+  updateContextBar();
 }
 
 // ════════════════════════════════════════
@@ -798,10 +1137,6 @@ async function loadAudioConfig() {
         if (v.output_device) outSel.value = v.output_device;
       }
     } catch(e) { /* devices failed silently */ }
-
-    // Init VU meters
-    drawVuMeter('vuInput', -60);
-    drawVuMeter('vuOutput', -60);
   } catch(e) { toast('加载音频配置失败', 'error'); }
 }
 
@@ -832,14 +1167,14 @@ const VU_COLORS = ['#00ff88','#88ff00','#ccff00','#ffff00','#ffcc00','#ff8800','
 
 function dbToY(db, h) { return h - Math.max(0, (db + 60) / 60 * h); }
 
-function drawVuMeter(canvasId, db) {
+function drawVuMeter(canvasId, db, peakDb) {
   const c = document.getElementById(canvasId);
   if (!c) return;
   const ctx = c.getContext('2d');
   const w = c.width, h = c.height;
   ctx.clearRect(0, 0, w, h);
 
-  // Background bars
+  // Background grid
   for (let i = 0; i < 60; i++) {
     const y = h - (i / 60) * h;
     const intensity = i < 50 ? 0.08 : (i < 55 ? 0.15 : 0.25);
@@ -851,27 +1186,96 @@ function drawVuMeter(canvasId, db) {
   const fillH = Math.max(0, (db + 60) / 60 * h);
   if (fillH > 0) {
     const gradient = ctx.createLinearGradient(0, h, 0, 0);
-    const stopCount = VU_COLORS.length;
-    for (let i = 0; i < stopCount; i++) {
-      gradient.addColorStop(i / stopCount, VU_COLORS[i]);
+    for (let i = 0; i < VU_COLORS.length; i++) {
+      gradient.addColorStop(i / VU_COLORS.length, VU_COLORS[i]);
     }
     ctx.fillStyle = gradient;
     ctx.fillRect(2, h - fillH, w - 4, fillH);
   }
 
   // Peak hold line
-  const peakY = dbToY(db, h);
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(1, peakY, w - 2, 2);
+  if (peakDb !== undefined) {
+    const peakY = dbToY(Math.max(-60, peakDb), h);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(1, peakY, w - 2, 2);
+  }
 }
 
 function updateVuDisplay(type, data) {
   const db = Math.max(-60, Math.min(0, data.db || -60));
+  const peak = data.peak !== undefined ? 20 * Math.log10(Math.max(data.peak, 1e-6)) : db;
   const canvasId = type === 'vu_input' ? 'vuInput' : 'vuOutput';
   const labelId = type === 'vu_input' ? 'vuInputDb' : 'vuOutputDb';
-  drawVuMeter(canvasId, db);
+  const rmsId = type === 'vu_input' ? 'vuInputRms' : 'vuOutputRms';
+  drawVuMeter(canvasId, db, peak);
   const label = document.getElementById(labelId);
   if (label) label.textContent = (db > -59 ? db.toFixed(1) : '-\u221E') + ' dB';
+  const rmsEl = document.getElementById(rmsId);
+  if (rmsEl) rmsEl.textContent = 'RMS: ' + data.rms.toFixed(5);
+}
+
+// ═══ Independent VU Monitor (always-on mic level) ═══
+
+function toggleVuMonitor() {
+  const btn = document.getElementById('vuToggleBtn');
+  const status = document.getElementById('vuStatus');
+  if (vuWs) {
+    vuWs.close();
+    vuWs = null;
+    btn.textContent = '🔴 启动监听';
+    btn.className = 'btn-sm';
+    if (status) status.textContent = '⚫ 已停止';
+    return;
+  }
+
+  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/vu`;
+  vuWs = new WebSocket(url);
+  btn.textContent = '⏹ 停止';
+  btn.className = 'btn-sm btn-warn';
+  if (status) status.textContent = '🟡 连接中...';
+
+  vuWs.onopen = () => {
+    if (status) status.textContent = '🟢 监听中';
+  };
+
+  vuWs.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'vu_input') {
+      updateVuDisplay('vu_input', msg.data);
+    } else if (msg.type === 'vu_ready') {
+      if (status) status.textContent = '🟢 ' + msg.data;
+    } else if (msg.type === 'vu_error') {
+      if (status) status.textContent = '🔴 ' + msg.data;
+      btn.textContent = '🔴 启动监听';
+      btn.className = 'btn-sm';
+    }
+  };
+
+  vuWs.onclose = () => {
+    vuWs = null;
+    btn.textContent = '🔴 启动监听';
+    btn.className = 'btn-sm';
+    if (status) status.textContent = '⚫ 已断开';
+  };
+
+  vuWs.onerror = () => {
+    if (status) status.textContent = '🔴 连接失败';
+    if (vuWs) vuWs.close();
+  };
+}
+
+// ═══ Audio Page Init ═══
+
+function initAudioPage() {
+  // Init VU meters
+  drawVuMeter('vuInput', -60);
+  drawVuMeter('vuOutput', -60);
+
+  // Load config
+  loadAudioConfig();
+
+  // Auto-connect VU monitor when entering page
+  // User clicks the button manually
 }
 
 // ═══ Wake Word Management ═══
@@ -1070,7 +1474,6 @@ function startVoicePipeline() {
     const log = document.getElementById('voiceLog');
 
     switch(msg.type) {
-      case 'vu_input':
       case 'vu_output':
         updateVuDisplay(msg.type, msg.data);
         break;

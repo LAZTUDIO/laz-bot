@@ -20,6 +20,9 @@ class MemoryItem:
     importance: float = 0.5
     tags: list[str] = None
     archived: bool = False
+    pleasure: float = 0.0
+    arousal: float = 0.0
+    dominance: float = 0.0
 
 
 class LongTermMemory:
@@ -50,7 +53,10 @@ class LongTermMemory:
             access_count INTEGER DEFAULT 1,
             importance REAL DEFAULT 0.5,
             tags TEXT DEFAULT '[]',
-            archived INTEGER DEFAULT 0
+            archived INTEGER DEFAULT 0,
+            pleasure REAL DEFAULT 0.0,
+            arousal REAL DEFAULT 0.0,
+            dominance REAL DEFAULT 0.0
         )""")
         conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
             content, tags, content=long_term_memories, content_rowid=id
@@ -68,12 +74,14 @@ class LongTermMemory:
             INSERT INTO memories_fts(rowid, content, tags) VALUES (new.id, new.content, new.tags); END;""")
         conn.commit()
 
-    def add(self, content: str, embedding: np.ndarray, importance: float = 0.5, tags: list[str] = None) -> int:
+    def add(self, content: str, embedding: np.ndarray, importance: float = 0.5, tags: list[str] = None,
+            pleasure: float = 0.0, arousal: float = 0.0, dominance: float = 0.0) -> int:
         now = time.time()
         conn = self._get_conn()
         emb_bytes = embedding.astype(np.float32).tobytes()
-        cur = conn.execute("INSERT INTO long_term_memories (content,embedding,created_at,last_accessed,access_count,importance,tags) VALUES (?,?,?,?,1,?,?)",
-            (content, emb_bytes, now, now, importance, json.dumps(tags or [])))
+        cur = conn.execute("""INSERT INTO long_term_memories (content,embedding,created_at,last_accessed,access_count,importance,tags,pleasure,arousal,dominance)
+            VALUES (?,?,?,?,1,?,?,?,?,?)""",
+            (content, emb_bytes, now, now, importance, json.dumps(tags or []), pleasure, arousal, dominance))
         mem_id = cur.lastrowid
         conn.execute("INSERT INTO memories_vec (id, embedding) VALUES (?, ?)", (mem_id, emb_bytes))
         conn.commit()
@@ -142,7 +150,8 @@ class LongTermMemory:
     def _row_to_item(self, row) -> MemoryItem:
         return MemoryItem(id=row["id"], content=row["content"], created_at=row["created_at"],
             last_accessed=row["last_accessed"], access_count=row["access_count"],
-            importance=row["importance"], tags=json.loads(row["tags"] or "[]"), archived=bool(row["archived"]))
+            importance=row["importance"], tags=json.loads(row["tags"] or "[]"), archived=bool(row["archived"]),
+            pleasure=row.get("pleasure", 0.0), arousal=row.get("arousal", 0.0), dominance=row.get("dominance", 0.0))
 
     def close(self):
         if self._conn: self._conn.close(); self._conn = None

@@ -12,17 +12,19 @@ class WakeWordDetector:
 
     def __init__(self, wake_words_dir: str = "wake_words"):
         self.wake_words_dir = Path(wake_words_dir)
-        self.models: dict = {}  # name -> openwakeword Model
-        self.thresholds: dict = {}  # name -> float
+        self._model = None
+        self.model_names: list[str] = []
+        self.thresholds: dict[str, float] = {}
         self._on_wakeword: Optional[Callable] = None
         self._sample_rate = 16000
+        self._frame_size = 1280  # openWakeWord 固定帧大小 (80ms @16kHz)
 
     def load_models(self, wake_word_names: list[str]):
         """加载 ONNX 唤醒词模型"""
         try:
             from openwakeword.model import Model
         except ImportError:
-            logger.warning("openwakeword not installed, run: pip install openwakeword")
+            logger.warning("openwakeword not installed")
             return
 
         model_paths = []
@@ -31,6 +33,7 @@ class WakeWordDetector:
             if path.exists():
                 model_paths.append(str(path))
                 self.thresholds[name] = 0.5
+                self.model_names.append(name)
                 logger.info(f"[WakeWord] Found model: {name} ({path.stat().st_size} bytes)")
             else:
                 logger.warning(f"[WakeWord] Model not found: {path}")
@@ -40,44 +43,55 @@ class WakeWordDetector:
             return
 
         try:
-            # v0.4.0 API: single Model with multiple paths
             self._model = Model(wakeword_model_paths=model_paths)
-            # Extract model names from the loaded model
-            if hasattr(self._model, 'models'):
-                for key in self._model.models.keys():
-                    self.models[key] = key
-                    logger.info(f"[WakeWord] Loaded: {key}")
-            elif hasattr(self._model, 'class_mapping'):
-                for key in self._model.class_mapping.keys():
-                    self.models[key] = key
-                    logger.info(f"[WakeWord] Loaded: {key}")
-            else:
-                # Fallback: use the names we provided
-                for name in wake_word_names:
-                    if Path(self.wake_words_dir / f"{name}.onnx").exists():
-                        self.models[name] = name
-                        logger.info(f"[WakeWord] Loaded (fallback mapping): {name}")
-
-            logger.info(f"[WakeWord] Ready: {len(self.models)} model(s) loaded")
+            logger.info(f"[WakeWord] Ready: {len(model_paths)} model(s) loaded")
         except Exception as e:
             logger.error(f"[WakeWord] Failed to load: {e}")
 
     def set_callback(self, callback: Callable[[str], None]):
-        """唤醒回调: callback(wake_word_name)"""
         self._on_wakeword = callback
 
-    def process_frame(self, audio_chunk: np.ndarray) -> list[str]:
-        """处理单帧音频 (1D, 16kHz, int16 or float32)"""
-        if not hasattr(self, '_model'):
+    def _audio_to_16k_float32(self, audio: np.ndarray, source_sample_rate: int) -> np.ndarray:
+        """统一转成 16kHz float32"""
+        # int16 → float32
+        if audio.dtype == np.int16:
+            audio = audio.astype(np.float32) / 32768.0
+        elif audio.dtype != np.float32:
+            audio = audio.astype(np.float32)
+
+        # 降采样到 16kHz
+        if source_sample_rate != 16000:
+            target_len = int(len(audio) * 16000 / source_sample_rate)
+            if target_len > 0:
+                audio = np.interp(
+                    np.linspace(0, len(audio) - 1, target_len),
+                    np.arange(len(audio)),
+                    audio
+                ).astype(np.float32)
+        return audio
+
+    def process_frame(self, audio_chunk: np.ndarray, source_sample_rate: int = 16000) -> list[str]:
+        """处理单帧音频 (1280 samples @16kHz 或等时长)"""
+        if self._model is None:
             return []
 
-        result = self._model.predict(audio_chunk)
-        # openWakeWord v0.4 returns dict like {'jiweisi': 0.92}
+        # 统一格式
+        audio = self._audio_to_16k_float32(audio_chunk, source_sample_rate)
+
+        # 如果长度不是 _frame_size，裁剪或补齐
+        if len(audio) != self._frame_size:
+            if len(audio) > self._frame_size:
+                audio = audio[:self._frame_size]
+            else:
+                audio = np.pad(audio, (0, self._frame_size - len(audio)))
+
+        result = self._model.predict(audio)
         if not isinstance(result, dict):
             return []
 
         matched = []
-        for name, score in result.items():
+        for name in self.model_names:
+            score = result.get(name, 0.0)
             threshold = self.thresholds.get(name, 0.5)
             if score > threshold:
                 matched.append(name)
@@ -86,29 +100,45 @@ class WakeWordDetector:
 
         return matched
 
-    def contains_wake_word(self, audio: np.ndarray) -> bool:
-        """检测一段完整音频是否包含唤醒词（滑动窗口方式）"""
-        if not hasattr(self, '_model'):
+    def contains_wake_word(self, audio: np.ndarray, source_sample_rate: int = 48000) -> bool:
+        """逐帧扫描整段音频检测唤醒词
+
+        将音频切成 openWakeWord 标准的 1280-sample 帧，
+        每帧独立预测，任一帧触发即返回 True。
+        """
+        if self._model is None:
             return False
 
-        # Ensure float32
-        if audio.dtype == np.int16:
-            audio = audio.astype(np.float32) / 32768.0
+        # 统一转 16kHz float32
+        audio = self._audio_to_16k_float32(audio, source_sample_rate)
 
-        # Run predict on the full clip — openWakeWord internally windows
-        result = self._model.predict(audio)
-        if not isinstance(result, dict):
-            return False
+        # 切帧
+        step = self._frame_size // 2  # 50% 重叠
+        max_score = 0.0
+        best_name = ""
 
-        for name, score in result.items():
-            if score > self.thresholds.get(name, 0.5):
-                logger.info(f"[WakeWord] Detected '{name}' score={score:.3f}")
-                if self._on_wakeword:
-                    self._on_wakeword(name)
-                return True
+        for start in range(0, len(audio) - self._frame_size + 1, step):
+            frame = audio[start:start + self._frame_size]
+            if len(frame) < self._frame_size:
+                continue
+            result = self._model.predict(frame)
+            if not isinstance(result, dict):
+                continue
+            for name in self.model_names:
+                score = result.get(name, 0.0)
+                if score > max_score:
+                    max_score = score
+                    best_name = name
+                threshold = self.thresholds.get(name, 0.5)
+                if score > threshold:
+                    logger.info(f"[WakeWord] Detected '{name}' score={score:.3f} at frame {start//step}")
+                    if self._on_wakeword:
+                        self._on_wakeword(name)
+                    return True
 
+        if max_score > 0:
+            logger.debug(f"[WakeWord] Max score: {best_name}={max_score:.3f} (threshold={self.thresholds.get(best_name, 0.5)})")
         return False
 
     def set_threshold(self, name: str, threshold: float):
-        """设置特定唤醒词的阈值"""
         self.thresholds[name] = threshold

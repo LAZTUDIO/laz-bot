@@ -52,18 +52,19 @@ class EpisodicGraph:
         conn.commit()
         return cur.lastrowid
 
-    def relate_concepts(self, concepts: list[str]):
+    def relate_concepts(self, concepts: list[str], lr_mult: float = 1.0):
         if len(concepts) < 2: return
         node_ids = [self._get_or_create_node(c) for c in concepts]
         conn = self._get_conn()
+        lr = 0.1 * lr_mult  # Hebbian学习率 × 人格倍率
         for i in range(len(node_ids)):
             for j in range(i+1, len(node_ids)):
                 src, tgt = node_ids[i], node_ids[j]
                 row = conn.execute("SELECT weight FROM concept_edges WHERE source_id=? AND target_id=?", (src, tgt)).fetchone()
                 if row:
-                    conn.execute("UPDATE concept_edges SET weight=MIN(weight+0.1,10.0), co_occurrences=co_occurrences+1 WHERE source_id=? AND target_id=?", (src, tgt))
+                    conn.execute("UPDATE concept_edges SET weight=MIN(weight+?,10.0), co_occurrences=co_occurrences+1 WHERE source_id=? AND target_id=?", (lr, src, tgt))
                 else:
-                    conn.execute("INSERT INTO concept_edges (source_id,target_id,weight,co_occurrences) VALUES (?,?,0.3,1)", (src, tgt))
+                    conn.execute("INSERT INTO concept_edges (source_id,target_id,weight,co_occurrences) VALUES (?,?,?,1)", (src, tgt, 0.3 * lr_mult))
         conn.commit()
 
     def get_related(self, concept_name: str, top_k: int = 5) -> list[tuple[str, float]]:
