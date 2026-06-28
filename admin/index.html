@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LAZ-Bot 管理面板</title>
-<link rel="stylesheet" href="/admin/static/style.css?v=2">
+<link rel="stylesheet" href="/admin/static/style.css?v=3">
 </head>
 <body>
 <div id="app">
@@ -105,16 +105,16 @@
         </div>
         <div class="vu-row">
           <div class="vu-panel">
-            <div class="vu-label">🎤 输入 (麦克风)</div>
-            <canvas id="vuInput" width="50" height="200" style="border-radius:4px;background:#111"></canvas>
+            <div class="vu-label">🎤 麦克风</div>
+            <canvas id="vuInput" width="200" height="200"></canvas>
             <div class="vu-db" id="vuInputDb">-∞ dB</div>
-            <div class="vu-rms" id="vuInputRms" style="font-size:10px;color:var(--text2)">RMS: --</div>
+            <div class="vu-rms" id="vuInputRms">RMS: --</div>
           </div>
           <div class="vu-panel">
-            <div class="vu-label">🔊 输出 (扬声器)</div>
-            <canvas id="vuOutput" width="50" height="200" style="border-radius:4px;background:#111"></canvas>
+            <div class="vu-label">🔊 扬声器</div>
+            <canvas id="vuOutput" width="200" height="200"></canvas>
             <div class="vu-db" id="vuOutputDb">-∞ dB</div>
-            <div class="vu-rms" id="vuOutputRms" style="font-size:10px;color:var(--text2)">RMS: --</div>
+            <div class="vu-rms" id="vuOutputRms">RMS: --</div>
           </div>
         </div>
       </div>
@@ -122,22 +122,6 @@
       <div style="margin-bottom:16px;display:flex;align-items:center;gap:12px;margin-top:16px">
         <button id="voiceStartBtn" class="btn" onclick="startVoicePipeline()">▶ 启动语音</button>
         <span id="voiceStatus" style="color:var(--text2);font-size:14px">⚫ 未连接</span>
-      </div>
-
-      <div id="voiceLog" style="height:160px;overflow:auto;background:#1a1a2e;padding:12px;border-radius:8px;margin-bottom:16px;font-size:13px;color:var(--text2)"></div>
-
-      <!-- VU 声压表 -->
-      <div class="vu-row">
-        <div class="vu-panel">
-          <div class="vu-label">🎤 输入</div>
-          <canvas id="vuInput" width="40" height="180" style="border-radius:4px;background:#111"></canvas>
-          <div class="vu-db" id="vuInputDb">-∞ dB</div>
-        </div>
-        <div class="vu-panel">
-          <div class="vu-label">🔊 输出</div>
-          <canvas id="vuOutput" width="40" height="180" style="border-radius:4px;background:#111"></canvas>
-          <div class="vu-db" id="vuOutputDb">-∞ dB</div>
-        </div>
       </div>
 
       <!-- 音量控制 -->

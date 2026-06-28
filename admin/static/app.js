@@ -119,28 +119,10 @@ async function loadDashboard() {
           </div>
         </div>
       </div>
-      <div class="card">
-        <h3>系统资源</h3>
-        <div class="stat-grid">
-          <div class="stat-item">
-            <div class="stat-value">${Math.round(system.cpu?.percent || 0)}%</div>
-            <div class="stat-label">CPU 使用率</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value">${formatBytes(system.memory?.used || 0)}</div>
-            <div class="stat-label">内存使用 (/${formatBytes(system.memory?.total || 0)})</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value">${Math.round(system.memory?.percent || 0)}%</div>
-            <div class="stat-label">内存占比</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value">${Math.round(system.disk?.percent || 0)}%</div>
-            <div class="stat-label">磁盘使用率</div>
-          </div>
-        </div>
-        <div style="margin-top:8px;font-size:11px;color:var(--text2)">
-          ${system.hostname || ''} · ${system.platform || ''} · Python ${system.python || ''}
+      <div class="card" id="systemCard">
+        <h3>系统资源 <span style="font-size:10px;color:var(--text2);font-weight:normal">实时</span></h3>
+        <div class="stat-grid" id="systemStats">
+          ${renderSystemStats(system)}
         </div>
       </div>
       <div class="card">
@@ -174,6 +156,56 @@ async function loadDashboard() {
   } catch(e) {
     container.innerHTML = '<div class="card"><h3>⚠️ 加载失败</h3><p>无法连接 API</p></div>';
   }
+
+  // Start real-time refresh for system resources
+  startDashboardRefresh();
+}
+
+let dashboardRefreshTimer = null;
+function startDashboardRefresh() {
+  if (dashboardRefreshTimer) clearInterval(dashboardRefreshTimer);
+  dashboardRefreshTimer = setInterval(refreshSystemCard, 3000);
+}
+
+async function refreshSystemCard() {
+  try {
+    const system = await api('/api/system');
+    const statsDiv = document.getElementById('systemStats');
+    if (statsDiv) {
+      statsDiv.innerHTML = renderSystemStats(system);
+    }
+  } catch(e) { /* ignore */ }
+}
+
+function renderSystemStats(system) {
+  const used = formatBytes(system.memory?.used || 0);
+  const total = formatBytes(system.memory?.total || 0);
+  const cpuPct = Math.round(system.cpu?.percent || 0);
+  const memPct = Math.round(system.memory?.percent || 0);
+  const diskPct = Math.round(system.disk?.percent || 0);
+  return `
+    <div class="stat-item">
+      <div class="stat-value">${cpuPct}%</div>
+      <div class="stat-label">CPU</div>
+      <div style="height:3px;background:#222;border-radius:2px;margin-top:4px">
+        <div style="height:100%;width:${cpuPct}%;background:${cpuPct>80?'#f44':cpuPct>50?'#fa0':'#0f0'};border-radius:2px;transition:width 0.5s"></div>
+      </div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">${used}</div>
+      <div class="stat-label">内存 /${total}</div>
+      <div style="height:3px;background:#222;border-radius:2px;margin-top:4px">
+        <div style="height:100%;width:${memPct}%;background:${memPct>80?'#f44':memPct>50?'#fa0':'#0f0'};border-radius:2px;transition:width 0.5s"></div>
+      </div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">${diskPct}%</div>
+      <div class="stat-label">磁盘</div>
+      <div style="height:3px;background:#222;border-radius:2px;margin-top:4px">
+        <div style="height:100%;width:${diskPct}%;background:${diskPct>80?'#f44':diskPct>50?'#fa0':'#0f0'};border-radius:2px;transition:width 0.5s"></div>
+      </div>
+    </div>
+  `;
 }
 
 function formatBytes(b) {
@@ -268,18 +300,18 @@ async function loadPersonality() {
       <div class="cards">
         <div class="card">
           <h3>所有人格 (${pList.length} 种)</h3>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;margin-top:8px">
+          <div class="personality-grid">
             ${pList.map(([code, t]) => `
-              <div class="personality-item ${code === p.current ? 'active' : ''}"
-                   onclick="switchPersonality('${code}')" style="cursor:pointer;text-align:left">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-                  <span style="font-size:24px">${t.emoji}</span>
-                  <div style="flex:1">
-                    <div style="font-size:12px;font-weight:600;color:var(--text)">${t.name}</div>
-                    <div style="font-size:10px;color:var(--accent);font-family:monospace">${code} · ${t.pattern}</div>
-                  </div>
+              <div class="personality-card ${code === p.current ? 'active' : ''}"
+                   onclick="switchPersonality('${code}')">
+                <div class="pc-top">
+                  <span class="pc-emoji">${t.emoji}</span>
+                  <span class="pc-name">${t.name}</span>
+                  <span class="pc-code">${code}</span>
                 </div>
-                <div style="font-size:11px;color:var(--text2);margin-left:32px">${escapeHtml(t.dim_short || '')}</div>
+                <div class="pc-pattern">${t.pattern}</div>
+                <div class="pc-desc">${t.description}</div>
+                <div class="pc-dims">${escapeHtml(t.dim_short || '')}</div>
               </div>
             `).join('')}
           </div>
@@ -1161,7 +1193,7 @@ async function saveAudioConfig() {
   } catch(e) { toast('保存失败', 'error'); }
 }
 
-// ═══ VU Meter ═══
+// ═══ VU Meter (Cyberpunk Needle Gauge) ═══
 
 const VU_COLORS = ['#00ff88','#88ff00','#ccff00','#ffff00','#ffcc00','#ff8800','#ff4400','#ff0000'];
 
@@ -1170,35 +1202,111 @@ function dbToY(db, h) { return h - Math.max(0, (db + 60) / 60 * h); }
 function drawVuMeter(canvasId, db, peakDb) {
   const c = document.getElementById(canvasId);
   if (!c) return;
-  const ctx = c.getContext('2d');
   const w = c.width, h = c.height;
+  const ctx = c.getContext('2d');
   ctx.clearRect(0, 0, w, h);
 
-  // Background grid
-  for (let i = 0; i < 60; i++) {
-    const y = h - (i / 60) * h;
-    const intensity = i < 50 ? 0.08 : (i < 55 ? 0.15 : 0.25);
-    ctx.fillStyle = `rgba(255,255,255,${intensity})`;
-    ctx.fillRect(2, y - 1, w - 4, Math.max(1, h / 60 - 1));
-  }
+  const cx = w / 2, cy = h * 0.75;
+  const radius = Math.min(w, h) * 0.55;
+  const startAngle = Math.PI * 0.75, endAngle = Math.PI * 2.25;
 
-  // Active fill
-  const fillH = Math.max(0, (db + 60) / 60 * h);
-  if (fillH > 0) {
-    const gradient = ctx.createLinearGradient(0, h, 0, 0);
-    for (let i = 0; i < VU_COLORS.length; i++) {
-      gradient.addColorStop(i / VU_COLORS.length, VU_COLORS[i]);
+  // Outer glow ring
+  const glow = ctx.createRadialGradient(cx, cy, radius * 0.85, cx, cy, radius * 1.08);
+  glow.addColorStop(0, 'rgba(0,255,136,0)');
+  glow.addColorStop(0.7, 'rgba(0,255,136,0.08)');
+  glow.addColorStop(1, 'rgba(0,255,136,0.15)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 1.08, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tick marks
+  for (let i = 0; i <= 60; i += 5) {
+    const angle = startAngle + (endAngle - startAngle) * (i / 60);
+    const inner = radius * 0.78, outer = radius * 0.88;
+    const color = i < 30 ? '#00ff88' : i < 45 ? '#ffcc00' : '#ff3333';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = i % 10 === 0 ? 2 : 1;
+    ctx.globalAlpha = i % 10 === 0 ? 1 : 0.5;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner);
+    ctx.lineTo(cx + Math.cos(angle) * outer, cy + Math.sin(angle) * outer);
+    ctx.stroke();
+    if (i % 10 === 0) {
+      const labelR = radius * 0.68;
+      const lx = cx + Math.cos(angle) * labelR, ly = cy + Math.sin(angle) * labelR;
+      ctx.fillStyle = color;
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(-i, lx, ly + 3);
     }
-    ctx.fillStyle = gradient;
-    ctx.fillRect(2, h - fillH, w - 4, fillH);
+  }
+  ctx.globalAlpha = 1;
+
+  // Arc background
+  const arcGrad = ctx.createConicalGradient ? null : null;
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.82, startAngle, endAngle);
+  ctx.stroke();
+
+  // Colored arc segments
+  const rawAngle = startAngle + (endAngle - startAngle) * Math.min(1, Math.max(0, (db + 60) / 60));
+  // Green → Yellow → Red gradient arc
+  const segments = [
+    { from: 0, to: 0.5, color: 'rgba(0,255,136,0.3)' },
+    { from: 0.5, to: 0.75, color: 'rgba(255,204,0,0.3)' },
+    { from: 0.75, to: 1.0, color: 'rgba(255,51,51,0.3)' },
+  ];
+  segments.forEach(seg => {
+    const segStart = Math.max(seg.from, Math.min(seg.to, (db + 60) / 60));
+    // Actually draw full segments up to current level
+  });
+
+  // Active arc up to current level
+  if (db > -59) {
+    const activeAngle = startAngle + (endAngle - startAngle) * Math.min(1, (db + 60) / 60);
+    const hue = db > -20 ? 0 : db > -35 ? 40 : 130;
+    ctx.strokeStyle = `hsl(${hue}, 100%, 60%)`;
+    ctx.lineWidth = 4;
+    ctx.shadowColor = `hsl(${hue}, 100%, 50%)`;
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * 0.82, startAngle, activeAngle);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
-  // Peak hold line
-  if (peakDb !== undefined) {
-    const peakY = dbToY(Math.max(-60, peakDb), h);
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(1, peakY, w - 2, 2);
-  }
+  // Needle
+  const needleAngle = startAngle + (endAngle - startAngle) * Math.min(1, (db + 60) / 60);
+  const needleLen = radius * 0.7;
+  const nx = cx + Math.cos(needleAngle) * needleLen;
+  const ny = cy + Math.sin(needleAngle) * needleLen;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(nx, ny);
+  ctx.stroke();
+
+  // Needle dot
+  ctx.fillStyle = '#0ff';
+  ctx.shadowColor = '#0ff';
+  ctx.shadowBlur = 6;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // Digital readout
+  ctx.fillStyle = '#0f0';
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#0f0';
+  ctx.shadowBlur = 4;
+  ctx.fillText((db > -59 ? db.toFixed(1) : '-\u221E') + ' dB', cx, cy - radius * 0.55);
+  ctx.shadowBlur = 0;
 }
 
 function updateVuDisplay(type, data) {
