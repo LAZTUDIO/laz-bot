@@ -153,6 +153,9 @@ async function loadDashboard() {
       </div>` : ''}
     `;
     document.getElementById('appVersion').textContent = `v${config.app?.version || '0.1'}`;
+
+    // 项目介绍
+    renderProjectIntro(config);
   } catch(e) {
     container.innerHTML = '<div class="card"><h3>⚠️ 加载失败</h3><p>无法连接 API</p></div>';
   }
@@ -175,6 +178,48 @@ async function refreshSystemCard() {
       statsDiv.innerHTML = renderSystemStats(system);
     }
   } catch(e) { /* ignore */ }
+}
+
+function renderProjectIntro(config) {
+  const container = document.getElementById('projectIntro');
+  if (!container) return;
+  const ver = config?.app?.version || '0.5.0';
+  container.innerHTML = `
+    <div class="card" style="grid-column: 1 / -1">
+      <h3>🚀 关于 LAZ-Bot v${ver}</h3>
+      <p style="font-size:13px;line-height:1.7;color:var(--text2);margin:8px 0">
+        <strong>LAZ-Bot</strong> 不是一个普通聊天机器人——它是一个<strong>有性格的树莓派融合智能体</strong>。
+        基于 SBTI 人格体系（27 种人格类型 × 15 维度评分 × PAD 三维情绪模型），
+        LAZ-Bot 不只是"回答问题"，而是<strong>以某种人格的身份与你对话</strong>。
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-top:12px">
+        <div style="background:var(--bg);border-radius:8px;padding:12px">
+          <div style="font-size:16px">🧬</div>
+          <div style="font-size:12px;font-weight:600;margin:4px 0">SBTI 人格引擎</div>
+          <div style="font-size:11px;color:var(--text2)">27种人格 · 15维度 · PAD情绪</div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:12px">
+          <div style="font-size:16px">🧠</div>
+          <div style="font-size:12px;font-weight:600;margin:4px 0">三层记忆融合</div>
+          <div style="font-size:11px;color:var(--text2)">短期+长期+脑图 · 艾宾浩斯遗忘</div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:12px">
+          <div style="font-size:16px">🎤</div>
+          <div style="font-size:12px;font-weight:600;margin:4px 0">语音交互</div>
+          <div style="font-size:11px;color:var(--text2)">唤醒词 · VAD · STT · TTS</div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:12px">
+          <div style="font-size:16px">🔧</div>
+          <div style="font-size:12px;font-weight:600;margin:4px 0">工具执行引擎</div>
+          <div style="font-size:11px;color:var(--text2)">AST安全沙箱 · 3个内置工具</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;text-align:center">
+        🍓 运行在树莓派 5 · Open WebUI 中转 · 硅基流动云端 API · 
+        <a href="https://github.com/laztudio/laz-bot" target="_blank" style="color:var(--accent)">GitHub</a>
+      </div>
+    </div>
+  `;
 }
 
 function renderSystemStats(system) {
@@ -605,6 +650,48 @@ async function updateContextBar() {
     document.getElementById('ctxEmotion').textContent = `💖 ${e.label}`;
     document.getElementById('ctxModel').textContent = `🔌 ${llmLabel}`;
   } catch(e) { /* ignore */ }
+}
+
+function renderProjectIntro(config) {
+  const container = document.getElementById('projectIntro');
+  if (!container) return;
+  const ver = config?.app?.version || '0.5.0';
+  container.innerHTML = `
+    <div class="card" style="grid-column: 1 / -1">
+      <h3>🚀 关于 LAZ-Bot v${ver}</h3>
+      <p style="font-size:13px;line-height:1.7;color:var(--text2);margin:8px 0">
+        <strong>LAZ-Bot</strong> 不是一个普通聊天机器人——它是一个<strong>有性格的树莓派融合智能体</strong>。
+        基于 SBTI 人格体系（27 种人格类型 × 15 维度评分 × PAD 三维情绪模型），
+        LAZ-Bot 不只是"回答问题"，而是<strong>以某种人格的身份与你对话</strong>。
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-top:12px">
+        <div style="background:var(--bg);border-radius:8px;padding:12px">
+          <div style="font-size:16px">🧬</div>
+          <div style="font-size:12px;font-weight:600;margin:4px 0">SBTI 人格引擎</div>
+          <div style="font-size:11px;color:var(--text2)">27种人格 · 15维度 · PAD情绪</div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:12px">
+          <div style="font-size:16px">🧠</div>
+          <div style="font-size:12px;font-weight:600;margin:4px 0">三层记忆融合</div>
+          <div style="font-size:11px;color:var(--text2)">短期+长期+脑图 · 艾宾浩斯遗忘</div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:12px">
+          <div style="font-size:16px">🎤</div>
+          <div style="font-size:12px;font-weight:600;margin:4px 0">语音交互</div>
+          <div style="font-size:11px;color:var(--text2)">唤醒词 · VAD · STT · TTS</div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:12px">
+          <div style="font-size:16px">🔧</div>
+          <div style="font-size:12px;font-weight:600;margin:4px 0">工具执行引擎</div>
+          <div style="font-size:11px;color:var(--text2)">AST安全沙箱 · 3个内置工具</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;text-align:center">
+        🍓 运行在树莓派 5 · Open WebUI 中转 · 硅基流动云端 API · 
+        <a href="https://github.com/laztudio/laz-bot" target="_blank" style="color:var(--accent)">GitHub</a>
+      </div>
+    </div>
+  `;
 }
 
 function newSession() {

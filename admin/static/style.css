@@ -295,12 +295,12 @@ button:hover { opacity: 0.85; }
 /* ── Personality ── */
 .personality-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 10px;
   margin-top: 10px;
 }
 .personality-card {
-  padding: 14px;
+  padding: 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
   cursor: pointer;
@@ -308,7 +308,7 @@ button:hover { opacity: 0.85; }
   background: var(--bg);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 .personality-card:hover {
   border-color: var(--accent);
