@@ -42,8 +42,10 @@ _deprecated/
 *.swo
 .DS_Store
 Thumbs.db
+FETCH_HEAD
 
 # ── logs / temp ──
+logs/
 *.log
 setup.log
 setup_docker.log
@@ -52,6 +54,9 @@ setup_docker.log
 # ── uploads / media ──
 media/
 uploads/
+
+# ── dev tools / tests ──
+admin/static/test.html
 
 # ── Open WebUI (Docker managed separately) ──
 openwebui_data/

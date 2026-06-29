@@ -130,6 +130,15 @@
         <span id="voiceStatus" style="color:var(--text2);font-size:14px">⚫ 未连接</span>
       </div>
 
+      <!-- 实时日志 -->
+      <div class="log-panel" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <span style="font-weight:600;font-size:13px">📋 实时日志</span>
+          <button onclick="clearVoiceLog()" class="btn-sm">清空</button>
+        </div>
+        <div id="voiceLog" style="height:180px;overflow:auto;background:#0a0a14;padding:10px;border-radius:8px;font-size:11px;font-family:monospace;color:#0f0;line-height:1.6"></div>
+      </div>
+
       <!-- 音量控制 -->
       <div class="gain-row">
         <div class="gain-group">

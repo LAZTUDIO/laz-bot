@@ -118,29 +118,44 @@
 
 ### 安装
 
+#### 一键安装（推荐）
+
+```bash
+git clone https://github.com/LAZTUDIO/laz-bot.git
+cd laz-bot
+bash scripts/install.sh
+# 编辑 config.yaml，填入你的 API Key 和模型配置
+bash scripts/start.sh
+```
+
+#### 手动安装
+
 ```bash
 # 1. 克隆
 git clone https://github.com/LAZTUDIO/laz-bot.git
 cd laz-bot
 
-# 2. 创建虚拟环境
+# 2. 系统依赖（音频支持）
+sudo apt install -y python3-venv alsa-utils ffmpeg libsndfile1
+
+# 3. 创建虚拟环境
 python3 -m venv venv
 source venv/bin/activate
 
-# 3. 安装依赖
+# 4. 安装 Python 依赖
 pip install -r requirements.txt
 
-# 4. 配置
-cp config.yaml.example config.yaml
+# 5. 配置
+cp -n config.yaml.example config.yaml   # -n 防止覆盖已有配置
 # 编辑 config.yaml，填入你的 API Key 和模型配置
 
-# 5. 初始化数据库
-python3 -c "from memory.memory_service import MemoryService; import yaml; cfg=yaml.safe_load(open('config.yaml')); MemoryService(cfg)"
+# 6. 初始化数据库
+python3 scripts/init_db.py
 
-# 6. 启动
+# 7. 启动
 python -m uvicorn orchestrator.main:app --host 0.0.0.0 --port 8765
 
-# 7. 打开管理界面
+# 8. 打开管理界面
 # http://你的树莓派IP:8765/admin
 ```
 
@@ -238,6 +253,12 @@ laz-bot/
 │   ├── episodic_graph.py      # 情节图谱（概念关联）
 │   └── forgetting.py          # Ebbinghaus 遗忘调度
 ├── voice_pipeline/            # 语音管线
+│   ├── pipeline.py            # 主管线：采集→VAD→STT→LLM→TTS→播放
+│   ├── alsa_capture.py        # ALSA 直接采集 (arecord/aplay)
+│   ├── wakeword.py            # 唤醒词检测 (openWakeWord)
+│   ├── stt_client.py          # 语音识别客户端
+│   └── tts_client.py          # 语音合成客户端
+├── executor/                  # 工具执行器（沙箱 + 工具注册）
 ├── admin/                     # Web 管理界面（SPA）
 ├── scripts/                   # 部署/安装脚本
 ├── config.yaml.example        # 配置模板
@@ -288,7 +309,8 @@ laz-bot/
 | LLM 网关 | OpenAI 兼容协议 (httpx) |
 | 向量存储 | sqlite-vec |
 | 音频采集 | ALSA (arecord/aplay) |
-| VAD / 唤醒词 | webrtcvad + openWakeWord (ONNX) |
+| VAD | RMS energy-based（自适应噪声基线 + 双阈值） |
+| 唤醒词 | openWakeWord (ONNX) |
 | 前端管理 | 原生 SPA (HTML/CSS/JS) |
 | 配置管理 | YAML |
 | 平台 | Raspberry Pi 5 (Raspberry Pi OS) |

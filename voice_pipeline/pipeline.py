@@ -119,119 +119,49 @@ class VoicePipeline:
                 self.silence_threshold = max(self.noise_baseline * 2.0, 0.004)
 
         await self.send_event(ws, "status", "listening")
-        logger.info(f"[Voice] Listening (speech>{self.speech_threshold:.4f}, silence<{self.silence_threshold:.4f}, timeout={self.silence_timeout}s, max={self.max_recording_sec}s)")
+        logger.info(f"[Voice] Wake-word-first mode (speech>{self.speech_threshold:.4f}, silence<{self.silence_threshold:.4f}, timeout={self.silence_timeout}s)")
 
         try:
             while self.running:
-                await self.send_event(ws, "status", "waiting_speech")
+                # ═══ 持续监听唤醒词（流式，不经过VAD）═══
+                if self._wakeword:
+                    await self.send_event(ws, "status", "listening")
+                    wake_hit = await self._listen_for_wake_word(cap, ws)
+                    if not wake_hit:
+                        continue
+                    await self.send_event(ws, "status", "wake_word_detected")
 
-                # ── 预录音环形缓冲 ──
-                pre_buffer_size = int(self.sample_rate / self.frame_size * self.pre_speech_sec)
-                pre_buffer = deque(maxlen=pre_buffer_size)
-
-                chunks = []
-                voice_detected = False
-                silence_frames = 0
-                total_frames = 0
-                max_frames = int(self.sample_rate / self.frame_size * self.max_recording_sec)
-                silence_limit = int(self.silence_timeout * self.sample_rate / self.frame_size)
-                idle_timeout = int(self.sample_rate / self.frame_size * 5)  # 5s 无语音则退出等待
-
-                idle = 0
-                vu_frames = 0
-                vu_acc_energy = 0.0
-                vu_push_every = max(1, int(self.vu_interval * self.sample_rate / self.frame_size))
-
-                while self.running and total_frames < max_frames:
-                    arr = cap.read() * self.input_gain  # 软件增益
-                    energy = np.sqrt(np.mean(arr ** 2))
-                    pre_buffer.append(arr)
-                    total_frames += 1
-
-                    # ── VU 表：每 N 帧推送一次 RMS ──
-                    vu_acc_energy += energy
-                    vu_frames += 1
-                    if vu_frames >= vu_push_every:
-                        avg_rms = vu_acc_energy / vu_frames
-                        await self.send_event(ws, "vu_input", {
-                            "rms": round(float(avg_rms), 5),
-                            "db": round(20 * np.log10(max(avg_rms, 1e-6)), 1),
-                            "peak": round(float(np.max(np.abs(arr))), 4),
-                        })
-                        vu_acc_energy = 0.0
-                        vu_frames = 0
-
-                    if voice_detected:
-                        # 正在录音 → 用低阈值判断静默
-                        chunks.append(arr)
-                        if energy < self.silence_threshold:
-                            silence_frames += 1
-                            if silence_frames > silence_limit:
-                                break  # 足够长的静默 → 断句
-                        else:
-                            silence_frames = 0  # 又有声音 → 重置
-                    else:
-                        # 等待语音 → 用高阈值触发
-                        if energy > self.speech_threshold:
-                            voice_detected = True
-                            # 把预录音缓冲也加进去
-                            chunks.extend(pre_buffer)
-                            chunks.append(arr)
-                            self.in_conversation = True
-                            await self.send_event(ws, "status", "recording")
-                        else:
-                            idle += 1
-                            if idle > idle_timeout:
-                                break  # 超时 → 回到外层循环
-
-                    await asyncio.sleep(0)
-
-                # 达到最大录音长度 → 强制截断
-                if total_frames >= max_frames and voice_detected:
-                    logger.info(f"[Voice] Max recording reached ({self.max_recording_sec}s), cutting")
-
-                if not voice_detected or len(chunks) < 3:
-                    # 没检测到有效语音
+                # ═══ 唤醒后 → VAD 捕获语音 → STT → LLM → TTS ═══
+                audio_data = await self._capture_speech(cap, ws)
+                if audio_data is None or len(audio_data) < self.frame_size * 3:
+                    await self.send_event(ws, "status", "listening")
                     continue
 
-                # ── 唤醒词检测 ──
-                audio_data = np.concatenate(chunks)
-                if self._wakeword:
-                    if not self._wakeword.contains_wake_word(audio_data, source_sample_rate=self.sample_rate):
-                        logger.info("[Voice] Wake word not detected — ignored")
-                        await self.send_event(ws, "status", "listening")
-                        continue
-
-                # ── STT ──
                 duration = len(audio_data) / self.sample_rate
                 logger.info(f"[Voice] Captured {duration:.1f}s audio")
                 await self.send_event(ws, "status", "transcribing")
                 text = await self._transcribe(audio_data)
-
                 if not text or len(text.strip()) < 2:
-                    await self.send_event(ws, "status", "hearing_noise")
-                    self.in_conversation = False
+                    await self.send_event(ws, "status", "listening")
                     continue
 
                 logger.info(f"[Voice] Heard: {text}")
                 await self.send_event(ws, "transcript", text)
 
-                # ── LLM（走认知循环，与聊天同源）──
+                # ── LLM ──
                 await self.send_event(ws, "status", "thinking")
                 if self.cycle:
-                    # 走完整的认知循环：记忆检索→人格注入→工具执行→记忆存储
                     reply_text = await self.cycle.process_text(text, session_id)
                     content = str(reply_text) if reply_text else "(空)"
                 else:
-                    # 降级：直接调 LLM
                     reply = await self.llm.chat_completion(
                         messages=[{"role": "user", "content": text}],
                     )
                     if "error" in reply:
                         await self.send_event(ws, "error", reply["error"])
-                        self.in_conversation = False
                         continue
                     content = reply["choices"][0]["message"]["content"]
+
                 logger.info(f"[Voice] Reply: {content[:60]}...")
                 await self.send_event(ws, "response", content)
 
@@ -239,7 +169,7 @@ class VoicePipeline:
                 await self.send_event(ws, "status", "speaking")
                 audio_out = await self._synthesize(content)
                 if audio_out is not None:
-                    audio_out = audio_out * self.output_gain  # 软件增益
+                    audio_out = audio_out * self.output_gain
                     out_rms = float(np.sqrt(np.mean(audio_out ** 2)))
                     await self.send_event(ws, "vu_output", {
                         "rms": round(out_rms, 4),
@@ -247,16 +177,13 @@ class VoicePipeline:
                     })
                     play.write(audio_out)
 
-                # ── 记忆（走认知循环时 process_text 内部已处理）──
+                # ── 记忆 ──
                 if not self.cycle and self.memory:
-                    asyncio.create_task(
-                        self.memory.store_interaction(session_id, "user", text))
-                    asyncio.create_task(
-                        self.memory.store_interaction(session_id, "assistant", content))
+                    asyncio.create_task(self.memory.store_interaction(session_id, "user", text))
+                    asyncio.create_task(self.memory.store_interaction(session_id, "assistant", content))
 
-                await self.send_event(ws, "status", "listening")
-                # 对话后的短暂冷却，避免立即重新触发
-                self.in_conversation = False
+                # 对话后的短暂冷却
+                await asyncio.sleep(0.5)
 
         except Exception as e:
             logger.error(f"[Voice] Pipeline error: {e}")
@@ -265,6 +192,127 @@ class VoicePipeline:
             cap.stop()
             play.stop()
             await self.send_event(ws, "status", "pipeline_stopped")
+
+    async def _listen_for_wake_word(self, cap, ws) -> bool:
+        """持续监听唤醒词 - 累积多帧后喂给模型"""
+        import time
+        t0 = time.time()
+        vu_last = 0
+        buffer = []
+
+        # 模型需要 1280 samples@16kHz = 3840 samples@48kHz
+        # ALSA frame=1024 -> 需要 4 帧
+        frames_per_window = max(1, int(1280 * self.sample_rate / 16000 / self.frame_size))
+        # 修正：向上取整，确保至少 3840 samples@48kHz → 1280 samples@16kHz
+        if frames_per_window * self.frame_size < 3840:
+            frames_per_window += 1
+
+        # 初始状态通知
+        await self.send_event(ws, "status", "listening_for_wake_word")
+        ww_names = self._wakeword.model_names if self._wakeword else []
+        ww_thresh = self._wakeword.thresholds.get(ww_names[0], 0.3) if ww_names else 0.3 if self._wakeword else 0
+        await self.send_event(ws, "wake_score", {
+            "name": ww_names[0] if ww_names else "unknown",
+            "score": 0,
+            "threshold": round(ww_thresh, 2),
+            "hit": False,
+        })
+
+        while self.running:
+            arr = cap.read() * self.input_gain
+            buffer.append(arr)
+
+            # VU 更新
+            now = time.time()
+            if now - vu_last > 0.20:
+                rms = float((arr ** 2).mean() ** 0.5)
+                await self.send_event(ws, "vu_input", {
+                    "rms": round(rms, 5),
+                    "db": round(20 * __import__('numpy').log10(max(rms, 1e-6)), 1),
+                })
+                vu_last = now
+
+            # 积累够了 -> 喂给唤醒词模型
+            if len(buffer) >= frames_per_window:
+                import numpy as np
+                chunk = np.concatenate(buffer[-frames_per_window:])
+                buffer = buffer[-2:]
+
+                if self._wakeword and self._wakeword._model:
+                    target_len = 1280
+                    src_len = len(chunk)
+                    if src_len != target_len:
+                        indices = np.linspace(0, src_len - 1, target_len)
+                        audio_16k = np.interp(indices, np.arange(src_len), chunk).astype(np.float32)
+                    else:
+                        audio_16k = chunk.astype(np.float32)
+
+                    result = self._wakeword._model.predict(audio_16k)
+                    if isinstance(result, dict):
+                        for name in self._wakeword.model_names:
+                            score = result.get(name, 0.0)
+                            threshold = self._wakeword.thresholds.get(name, 0.3)
+                            # 推送每一帧的唤醒词得分（所有分数都推，方便调试）
+                            await self.send_event(ws, "wake_score", {
+                                "name": name,
+                                "score": round(score, 4),
+                                "threshold": round(threshold, 2),
+                                "hit": score > threshold,
+                            })
+                            if score > threshold:
+                                logger.info(f"[WakeWord] Detected '{name}' score={score:.3f}")
+                                await self.send_event(ws, "wake_hit", {"name": name, "score": round(score, 4)})
+                                return True
+
+            # ONNX 状态定期重置
+            if time.time() - t0 > 60:
+                if self._wakeword and hasattr(self._wakeword._model, 'reset'):
+                    try:
+                        self._wakeword._model.reset()
+                    except Exception:
+                        pass
+                t0 = time.time()
+
+            await asyncio.sleep(0.005)
+
+        return False
+
+    async def _capture_speech(self, cap, ws) -> np.ndarray | None:
+        """唤醒后 → VAD 捕获完整语音段"""
+        chunks = []
+        pre_buffer = deque(maxlen=int(0.3 * self.sample_rate / self.frame_size))
+        total_frames = 0
+        max_frames = int(self.max_recording_sec * self.sample_rate / self.frame_size)
+        idle_limit = int(self.silence_timeout * self.sample_rate / self.frame_size)
+        idle = 0
+        voice_on = False
+
+        await self.send_event(ws, "status", "listening_for_speech")
+
+        while self.running and total_frames < max_frames:
+            arr = cap.read() * self.input_gain
+            total_frames += 1
+            energy = float(np.sqrt(np.mean(arr ** 2)))
+
+            if not voice_on:
+                pre_buffer.append(arr)
+                if energy > self.speech_threshold:
+                    voice_on = True
+                    chunks.extend(pre_buffer)
+                    chunks.append(arr)
+                    await self.send_event(ws, "status", "recording")
+            else:
+                chunks.append(arr)
+                if energy < self.silence_threshold:
+                    idle += 1
+                    if idle > idle_limit:
+                        break
+                else:
+                    idle = 0
+
+            await asyncio.sleep(0)
+
+        return np.concatenate(chunks) if voice_on and len(chunks) >= 3 else None
 
     async def _transcribe(self, audio: np.ndarray) -> str:
         entry = self.model_router.get_active_entry("stt")
@@ -308,16 +356,3 @@ class VoicePipeline:
 
     def stop(self):
         self.running = False
-        self._wakeword = None
-
-        # 唤醒词
-        wake_model_path = vc.get("wake_model_path", "")
-        wake_word_names = vc.get("wake_words", [])
-        if wake_model_path and wake_word_names:
-            from .wakeword import WakeWordDetector
-            # 复制 ONNX 到标准目录（如果路径不在 wake_words 下）
-            self._wakeword = WakeWordDetector(wake_words_dir="wake_words")
-            self._wakeword.load_models(wake_word_names)
-            wake_threshold = vc.get("wake_threshold", 0.5)
-            for name in wake_word_names:
-                self._wakeword.set_threshold(name, wake_threshold)

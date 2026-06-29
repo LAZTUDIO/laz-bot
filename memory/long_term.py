@@ -42,6 +42,7 @@ class LongTermMemory:
 
     def initialize(self):
         conn = self._get_conn()
+        conn.enable_load_extension(True)  # required on Python 3.12+
         sqlite_vec.load(conn)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""CREATE TABLE IF NOT EXISTS long_term_memories (
@@ -151,7 +152,9 @@ class LongTermMemory:
         return MemoryItem(id=row["id"], content=row["content"], created_at=row["created_at"],
             last_accessed=row["last_accessed"], access_count=row["access_count"],
             importance=row["importance"], tags=json.loads(row["tags"] or "[]"), archived=bool(row["archived"]),
-            pleasure=row.get("pleasure", 0.0), arousal=row.get("arousal", 0.0), dominance=row.get("dominance", 0.0))
+            pleasure=row["pleasure"] if "pleasure" in row.keys() else 0.0,
+            arousal=row["arousal"] if "arousal" in row.keys() else 0.0,
+            dominance=row["dominance"] if "dominance" in row.keys() else 0.0)
 
     def close(self):
         if self._conn: self._conn.close(); self._conn = None

@@ -1667,22 +1667,44 @@ function startVoicePipeline() {
   audioWs.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     const log = document.getElementById('voiceLog');
+    const now = new Date().toLocaleTimeString();
 
     switch(msg.type) {
       case 'vu_output':
         updateVuDisplay(msg.type, msg.data);
         break;
+      case 'wake_score':
+        if (log) {
+          const d = msg.data;
+          const color = d.score > d.threshold ? '#0f0' : d.score > d.threshold * 0.5 ? '#ff0' : '#666';
+          if (d.score > 0.08) {
+            log.innerHTML += `<div style="color:${color}">[${now}] 🎯 ${d.name}: ${d.score.toFixed(3)} (阈值${d.threshold})${d.hit?' ✅':''}</div>`;
+          }
+        }
+        break;
+      case 'wake_hit':
+        if (log) log.innerHTML += `<div style="color:#0f0;font-weight:bold">[${now}] ⚡ 唤醒! ${msg.data.name} (${msg.data.score.toFixed(3)})</div>`;
+        break;
       case 'transcript':
-        if (log) log.innerHTML += `<div class="voice-user">🗣 ${escapeHtml(msg.data)}</div>`;
+        if (log) log.innerHTML += `<div style="color:#0ff">[${now}] 🗣 STT: ${escapeHtml(msg.data)}</div>`;
         break;
       case 'response':
-        if (log) log.innerHTML += `<div class="voice-assistant">🤖 ${escapeHtml(msg.data)}</div>`;
+        if (log) log.innerHTML += `<div style="color:#ff0">[${now}] 🤖 LLM: ${escapeHtml(msg.data).slice(0, 80)}...</div>`;
         break;
       case 'status':
         if (statusEl) statusEl.innerText = '🟢 ' + msg.data;
+        if (log) log.innerHTML += `<div style="color:#aaa">[${now}] 📡 ${escapeHtml(msg.data)}</div>`;
         break;
       case 'error':
-        if (log) log.innerHTML += `<div class="voice-error">❌ ${escapeHtml(msg.data)}</div>`;
+        if (log) log.innerHTML += `<div style="color:#f44">[${now}] ❌ ${escapeHtml(msg.data)}</div>`;
+        break;
+      case 'vu_input':
+        updateVuDisplay(msg.type, msg.data);
+        // Also show VU in log every ~2s 
+        if (log && msg.data.db > -50 && !log._lastVu || (Date.now() - (log._lastVu||0)) > 2000) {
+          log.innerHTML += `<div style="color:#888">[${now}] 🎤 VU: ${msg.data.db.toFixed(1)}dB</div>`;
+          log._lastVu = Date.now();
+        }
         break;
     }
     if (log) log.scrollTop = log.scrollHeight;
@@ -1704,8 +1726,13 @@ function stopVoicePipeline() {
   if (audioWs) {
     audioWs.close();
     audioWs = null;
+    audioActive = false;
   }
-  audioActive = false;
+}
+
+function clearVoiceLog() {
+  const log = document.getElementById('voiceLog');
+  if (log) log.innerHTML = '';
 }
 
 // ════════════════════════════════════════
